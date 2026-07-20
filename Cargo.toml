@@ -1,0 +1,21 @@
+[package]
+name = "csm"
+version = "0.1.0"
+edition = "2021"
+authors = ["ianchen"]
+description = "Workspace memory for coding agents - session-scoped, cross-repo, cross-agent."
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+
+[[bin]]
+name = "csm"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
