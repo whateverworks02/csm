@@ -10,7 +10,6 @@ tells the agent how to maintain it.
 ```
 ~/.csm/
   index.json              # kv: name -> {origin_pwd, created_at, last_access, pinned}
-  current                 # last-started session name (discoverability hint)
   sessions/<name>/
     state.md              # source of truth: Task, AC, SOP, Progress, Key links, Open questions
     progress.md           # append-only, timestamped log
@@ -66,7 +65,6 @@ What happens on `csm <name>`:
   refreshes `last_access` otherwise;
 - scaffolds the workspace (`state.md`, `progress.md`, `scripts/INDEX.md`) if
   missing;
-- writes `~/.csm/current` (a discoverability hint);
 - runs `claude` with `CSM_SESSION=<name>` exported.
 
 It does **not** modify any file in your repo (the working-mode prompt is global,
@@ -89,13 +87,14 @@ per-terminal binding, used only for this in-process revival.)
 
 | Command | Description |
 | --- | --- |
+| `csm` | Pick a session whose `origin_pwd` is the current dir and launch it. |
 | `csm <name>` | Start/resume session `<name>` and launch Claude Code. |
 | `csm <name> --no-launch` | Set up the session but don't launch `claude` (for other agents). Prints `export CSM_SESSION=<name>`. |
 | `csm <name> --agents-md` | Also inject the csm prompt into this repo's `AGENTS.md` (for cross-agent support with Cursor/Codex). |
 | `csm start <name>` | Same as `csm <name>`, explicit form (also takes `--no-launch`, `--agents-md`). |
 | `csm list` | List sessions (sorted by last access; `*` = pinned). |
 | `csm pin <name>` / `csm unpin <name>` | Pin / unpin (pinned sessions are never GC'd). |
-| `csm show [name]` | Print a session's workspace path, metadata, and `state.md`. Defaults to `$CSM_SESSION` / `~/.csm/current`. |
+| `csm show [name]` | Print a session's workspace path, metadata, and `state.md`. Defaults to `$CSM_SESSION`, else opens a picker. |
 | `csm rm <name>` | Hard-delete a session (workspace dir + index entry). `--force` required for pinned; `--yes` skips confirm. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
 | `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |

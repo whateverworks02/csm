@@ -3,7 +3,6 @@
 //! Layout:
 //!   ~/.csm/
 //!     index.json          - kv: { sessions: { <name>: { origin_pwd, created_at, last_access, pinned } } }
-//!     current             - last-started session name (discoverability hint for non-claude agents)
 //!     sessions/<name>/
 //!       state.md
 //!       progress.md
@@ -41,10 +40,6 @@ pub fn sessions_dir() -> Result<PathBuf> {
 
 pub fn index_path() -> Result<PathBuf> {
     Ok(csm_home()?.join("index.json"))
-}
-
-pub fn current_path() -> Result<PathBuf> {
-    Ok(csm_home()?.join("current"))
 }
 
 pub fn session_dir(name: &str) -> Result<PathBuf> {

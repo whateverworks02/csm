@@ -21,8 +21,12 @@ mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Printed when a command finds no sessions (e.g. `csm list`, the `csm show` picker).
+const NO_SESSIONS_HINT: &str = "no csm sessions. start one with: csm <name>";
 
 #[derive(Parser)]
 #[command(
@@ -32,7 +36,7 @@ use std::process::Command;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Cmd,
+    command: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -73,7 +77,7 @@ enum Cmd {
 
     /// Show a session's workspace path and state.md.
     Show {
-        /// Session name. Defaults to $CSM_SESSION or ~/.csm/current.
+        /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
         name: Option<String>,
     },
 
@@ -102,12 +106,12 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Start {
+        Some(Cmd::Start {
             name,
             no_launch,
             agents_md,
-        } => cmd_start(&name, no_launch, agents_md),
-        Cmd::Other(vec) => {
+        }) => cmd_start(&name, no_launch, agents_md),
+        Some(Cmd::Other(vec)) => {
             let name = vec.first().cloned().unwrap_or_default();
             if name.is_empty() {
                 anyhow::bail!("missing session name");
@@ -116,22 +120,23 @@ fn main() -> Result<()> {
             let agents_md = vec.iter().any(|a| a == "--agents-md");
             cmd_start(&name, no_launch, agents_md)
         }
-        Cmd::List => cmd_list(),
-        Cmd::Pin { name } => {
+        Some(Cmd::List) => cmd_list(),
+        Some(Cmd::Pin { name }) => {
             store::set_pinned(&name, true)?;
             println!("pinned: {}", name);
             Ok(())
         }
-        Cmd::Unpin { name } => {
+        Some(Cmd::Unpin { name }) => {
             store::set_pinned(&name, false)?;
             println!("unpinned: {}", name);
             Ok(())
         }
-        Cmd::Rm { name, force, yes } => cmd_rm(&name, force, yes),
-        Cmd::Show { name } => cmd_show(name),
-        Cmd::Gc { older_than, yes } => gc::run(older_than, yes),
-        Cmd::Init => cmd_init(),
-        Cmd::Hook => hook::run_hook(),
+        Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
+        Some(Cmd::Show { name }) => cmd_show(name),
+        Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
+        Some(Cmd::Init) => cmd_init(),
+        Some(Cmd::Hook) => hook::run_hook(),
+        None => cmd_pick_here(),
     }
 }
 
@@ -141,10 +146,6 @@ fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
 
     let meta = store::touch_session(name, &origin_pwd)?;
     workspace::ensure_workspace(name, &meta)?;
-
-    // Discoverability hint for non-claude agents.
-    let cur = store::current_path()?;
-    std::fs::write(&cur, name)?;
 
     let dir = store::session_dir(name)?;
     eprintln!("csm: session `{}` -> {}", name, dir.display());
@@ -174,10 +175,83 @@ fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// Bare `csm` (no subcommand): list sessions whose `origin_pwd` is the current
+/// directory and let the user pick one to start. Prints a hint and exits if
+/// none match.
+fn cmd_pick_here() -> Result<()> {
+    let cwd = std::env::current_dir().context("getting current dir")?;
+    let cwd_str = cwd.display().to_string();
+    let idx = store::load_index()?;
+    let rows: Vec<(String, store::SessionMeta)> = idx
+        .sessions
+        .iter()
+        .filter(|(_, m)| m.origin_pwd == cwd_str)
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if rows.is_empty() {
+        println!("no csm sessions for {}.", cwd_str);
+        println!("start one with: csm <name>");
+        return Ok(());
+    }
+    let Some(name) = pick_session(&format!("sessions for {}", cwd_str), rows)? else {
+        return Ok(());
+    };
+    cmd_start(&name, false, false)
+}
+
+/// Print a numbered list of sessions (most recently accessed first) and read a
+/// 1-based selection from stdin. Returns the chosen name, or `None` if the user
+/// aborted (empty/`q`) or entered an invalid index. `rows` must be non-empty;
+/// callers handle the empty case with their own message.
+fn pick_session(
+    label: &str,
+    mut rows: Vec<(String, store::SessionMeta)>,
+) -> Result<Option<String>> {
+    rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
+    println!("{}:", label);
+    for (i, (name, m)) in rows.iter().enumerate() {
+        let last = store::format_last_access(&m.last_access);
+        let pin = if m.pinned { "*" } else { "" };
+        println!("  [{}] {:<20} {:<2} {:<16} {}", i + 1, name, pin, last, m.origin_pwd);
+    }
+    print!("\nselect a session (1-{}), 'q' to quit: ", rows.len());
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let line = line.trim();
+    if line.is_empty() || line.eq_ignore_ascii_case("q") {
+        println!("aborted");
+        return Ok(None);
+    }
+    match line.parse::<usize>() {
+        Ok(i) if i >= 1 && i <= rows.len() => Ok(Some(rows[i - 1].0.clone())),
+        _ => {
+            eprintln!("invalid selection: {}", line);
+            Ok(None)
+        }
+    }
+}
+
+/// Picker over all sessions. Prints a hint and returns `None` if there are no
+/// sessions or the user aborted.
+fn pick_session_all() -> Result<Option<String>> {
+    let idx = store::load_index()?;
+    if idx.sessions.is_empty() {
+        println!("{NO_SESSIONS_HINT}");
+        return Ok(None);
+    }
+    let rows: Vec<(String, store::SessionMeta)> = idx
+        .sessions
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    pick_session("all sessions", rows)
+}
+
 fn cmd_list() -> Result<()> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
-        println!("no csm sessions. start one with: csm <name>");
+        println!("{NO_SESSIONS_HINT}");
         return Ok(());
     }
     let mut rows: Vec<_> = idx.sessions.iter().collect();
@@ -225,13 +299,8 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         None => match std::env::var("CSM_SESSION") {
             Ok(n) if !n.is_empty() => n,
             _ => {
-                let cur = store::current_path()?;
-                match std::fs::read_to_string(&cur) {
-                    Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
-                    _ => anyhow::bail!(
-                        "no session name given (pass one, set $CSM_SESSION, or start with `csm <name>`)"
-                    ),
-                }
+                let Some(n) = pick_session_all()? else { return Ok(()) };
+                n
             }
         },
     };
