@@ -15,7 +15,7 @@ pub fn agents_md_block() -> String {
 
 const AGENTS_MD_BODY: &str = r#"## csm workspace memory
 
-When a `[csm]` workspace memory block appears in your context, a csm session is active. Follow this mode. Workspace: `~/.csm/sessions/<name>/` (name from the block, `$CSM_SESSION`, or `~/.csm/current`).
+When a `[csm]` workspace memory block appears in your context, a csm session is active. Follow this mode. Workspace: `~/.csm/sessions/<name>/` (name from the block or `$CSM_SESSION`).
 
 - `state.md` - source of truth. Sections: Task, Acceptance criteria, SOP, Progress, Key links, Open questions.
 - `progress.md` - append-only timestamped log.
