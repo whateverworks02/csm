@@ -1,9 +1,8 @@
-//! Idempotent injection of the csm working-mode prompt into a markdown context
-//! file - the global `~/.claude/CLAUDE.md` (via `csm init`) or a repo's
-//! `AGENTS.md` (via `csm <name> --agents-md`). The block is wrapped in marker
+//! Idempotent injection of the csm working-mode prompt into the global
+//! `~/.claude/CLAUDE.md` (via `csm init`). The block is wrapped in marker
 //! comments so re-running refreshes it in place.
 
-use crate::prompt::{agents_md_block, CSM_MARK_BEGIN, CSM_MARK_END};
+use crate::prompt::{csm_block, CSM_MARK_BEGIN, CSM_MARK_END};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -18,23 +17,10 @@ pub fn claude_md_path() -> Result<PathBuf> {
     Ok(claude_dir()?.join("CLAUDE.md"))
 }
 
-/// Walk up from `start` to find an existing AGENTS.md / agents.md.
-pub fn find_agents_md(start: &Path) -> Option<PathBuf> {
-    for dir in start.ancestors() {
-        for name in ["AGENTS.md", "agents.md"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
 /// dirs if missing. Idempotent. Returns the path.
 pub fn inject_file(path: &Path) -> Result<PathBuf> {
-    let block = agents_md_block();
+    let block = csm_block();
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let new_content = replace_or_prepend(&existing, &block);
     if new_content != existing {

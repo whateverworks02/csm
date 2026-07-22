@@ -3,7 +3,7 @@ name = "csm"
 version = "0.1.0"
 edition = "2021"
 authors = ["ianchen"]
-description = "Workspace memory for coding agents - session-scoped, cross-repo, cross-agent."
+description = "Workspace memory for coding agents - session-scoped, cross-repo."
 license = "MIT"
 
 [dependencies]

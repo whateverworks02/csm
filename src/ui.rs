@@ -3,9 +3,8 @@
 //! Built on `anstyle` (already in the dep tree via clap). Stream-aware:
 //! `paint` targets stdout (display commands), `epaint` targets stderr (status
 //! and diagnostics). Both honor `NO_COLOR` / `CLICOLOR_FORCE` and isatty, so
-//! color is stripped when piped - keeping machine-readable outputs (the
-//! `--no-launch` `export` line, the hook's JSON) clean. Those two outputs use
-//! raw `println!` anyway.
+//! color is stripped when piped - keeping the hook's JSON output clean. The
+//! hook uses raw `println!` anyway and never calls these helpers.
 //!
 //! Aesthetic: cargo-like restraint. Color, not icons - no checkmarks, stars,
 //! or bullets. Verbs and labels carry the meaning; paths and timestamps recede

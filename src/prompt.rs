@@ -1,5 +1,5 @@
-//! The csm working-mode prompt, injected into `~/.claude/CLAUDE.md` (via
-//! `csm init`) and optionally a repo's `AGENTS.md` (via `csm <name> --agents-md`).
+//! The csm working-mode prompt, injected into `~/.claude/CLAUDE.md` via
+//! `csm init`.
 //!
 //! Style: terse, action-first. No tool introduction - just tell the agent what
 //! to do when a session is active. No hard-wrapping (each unit on one line).
@@ -9,11 +9,11 @@ pub const CSM_MARK_BEGIN: &str = "<!-- csm:begin -->";
 pub const CSM_MARK_END: &str = "<!-- csm:end -->";
 
 /// The full marked block to inject.
-pub fn agents_md_block() -> String {
-    format!("{}\n{}\n{}", CSM_MARK_BEGIN, AGENTS_MD_BODY, CSM_MARK_END)
+pub fn csm_block() -> String {
+    format!("{}\n{}\n{}", CSM_MARK_BEGIN, PROMPT_BODY, CSM_MARK_END)
 }
 
-const AGENTS_MD_BODY: &str = r#"## csm workspace memory
+const PROMPT_BODY: &str = r#"## csm workspace memory
 
 When a `[csm]` block appears in your context, a csm workspace-memory session is active. The block hands you the **workspace directory** and the current `state.md` - use that path directly; do not look up the session name via env vars or files. csm only delivers state at session start. **Keeping `state.md` / `progress.md` current is your job, not csm's.**
 

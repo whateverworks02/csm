@@ -1,6 +1,6 @@
 # csm
 
-**Workspace memory for coding agents** - cross-agent, cross-time, cross-repo.
+**Workspace memory for coding agents** - cross-time, cross-repo.
 
 csm gives every task a durable, agent-neutral workspace memory directory. Start
 a session with `csm <name>`; from then on Claude Code automatically injects the
@@ -89,9 +89,6 @@ per-terminal binding, used only for this in-process revival.)
 | --- | --- |
 | `csm` | Pick a session whose `origin_pwd` is the current dir and launch it. |
 | `csm <name>` | Start/resume session `<name>` and launch Claude Code. |
-| `csm <name> --no-launch` | Set up the session but don't launch `claude` (for other agents). Prints `export CSM_SESSION=<name>`. |
-| `csm <name> --agents-md` | Also inject the csm prompt into this repo's `AGENTS.md` (for cross-agent support with Cursor/Codex). |
-| `csm start <name>` | Same as `csm <name>`, explicit form (also takes `--no-launch`, `--agents-md`). |
 | `csm list` | List sessions (sorted by last access; `*` = pinned). |
 | `csm pin <name>` / `csm unpin <name>` | Pin / unpin (pinned sessions are never GC'd). |
 | `csm show [name]` | Print a session's workspace path, metadata, and `state.md`. Defaults to `$CSM_SESSION`, else opens a picker. |
@@ -114,9 +111,7 @@ on). The style is cargo-like restraint - color, not icons: paths are
 abbreviated with `~`, `*` marks pinned sessions, and errors use cargo's red
 `error:` prefix.
 
-Machine-readable contracts are never styled: `csm <name> --no-launch` prints a
-plain `export CSM_SESSION=<name>` on stdout (safe to `eval`), and `csm hook`
-emits pure JSON on stdout.
+Machine-readable output is never styled: `csm hook` emits pure JSON on stdout.
 
 ## How the hook works
 
@@ -140,19 +135,19 @@ emits pure JSON on stdout.
 
 stdout contains **only** the JSON object; all diagnostics go to stderr.
 
-## Cross-agent / cross-repo
+## Cross-repo
 
-The workspace is just markdown + scripts, so any agent can use it:
-- **Claude Code**: the global `CLAUDE.md` (injected by `csm init`) carries the
-  working mode; the hook auto-injects `state.md` on start / `/clear`.
-- **Other agents** (Cursor, Codex, ...): run `csm <name> --no-launch`, then
-  `export CSM_SESSION=<name>` (or point the agent at the path from
-  `csm show <name>`). For agents that read `AGENTS.md` (Cursor/Codex), also run
-  `csm <name> --agents-md` in that repo to inject the working-mode block.
-- **Cross-repo**: the session **name** is the shared handle. Run `csm my-task`
-  in both the frontend and backend repos; the same
-  `~/.csm/sessions/my-task/state.md` is the shared task memory. Reference the
-  session name in commits/PRs.
+The workspace is just markdown + scripts. Claude Code is the supported agent:
+the global `CLAUDE.md` (injected by `csm init`) carries the working mode, and
+the hook auto-injects `state.md` on start / `/clear`. The workspace is plain
+files, so you can point any other agent at `~/.csm/sessions/<name>/` by hand,
+but csm does not auto-integrate with them (a native Codex/Cursor integration
+would hook their own session-start events, not write a file from here).
+
+**Cross-repo**: the session **name** is the shared handle. Run `csm my-task` in
+both the frontend and backend repos; the same
+`~/.csm/sessions/my-task/state.md` is the shared task memory. Reference the
+session name in commits/PRs.
 
 ## Design notes
 
@@ -165,9 +160,8 @@ The workspace is just markdown + scripts, so any agent can use it:
 - **Agents own the memory.** csm never writes `state.md` / `progress.md` beyond
   the initial scaffold. All updates are the agent's responsibility, guided by
   the `CLAUDE.md` prompt.
-- **No repo pollution by default.** The working-mode prompt lives in the global
-  `~/.claude/CLAUDE.md`; `csm <name>` does not touch repo files. AGENTS.md
-  injection is opt-in (`--agents-md`) for cross-agent repos.
+- **No repo pollution.** The working-mode prompt lives in the global
+  `~/.claude/CLAUDE.md`; `csm <name>` never touches repo files.
 
 ## Uninstall
 

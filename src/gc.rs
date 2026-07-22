@@ -5,6 +5,7 @@ use crate::store::{self, SessionMeta};
 use crate::ui;
 use anyhow::Result;
 use chrono::Local;
+use std::io::Write;
 
 pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let idx = store::load_index()?;
@@ -124,6 +125,7 @@ pub fn confirm(msg: &str) -> Result<bool> {
         ui::epaint(ui::BOLD, msg),
         ui::epaint(ui::DIM, "[y/N]"),
     );
+    std::io::stderr().flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(line.trim().eq_ignore_ascii_case("y"))

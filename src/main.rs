@@ -22,6 +22,7 @@ mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -29,7 +30,8 @@ use std::process::Command;
 #[command(
     name = "csm",
     version,
-    about = "Workspace memory for coding agents (cross-agent, cross-time, cross-repo)"
+    about = "Workspace memory for coding agents (cross-time, cross-repo)",
+    after_help = "Run `csm <name>` to start a session and launch Claude Code."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -38,20 +40,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Start (or resume) a csm session by name and launch Claude Code.
-    Start {
-        name: String,
-        /// Set up the session but do not launch `claude` (for other agents).
-        /// Prints `export CSM_SESSION=<name>`.
-        #[arg(long)]
-        no_launch: bool,
-        /// Also inject the csm prompt into this repo's AGENTS.md (for
-        /// cross-agent support with Cursor/Codex). Off by default to avoid
-        /// modifying tracked repo files.
-        #[arg(long)]
-        agents_md: bool,
-    },
-
     /// List all sessions.
     List,
 
@@ -98,7 +86,7 @@ enum Cmd {
     /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
     Hook,
 
-    /// Catch-all: `csm <name>` is shorthand for `csm start <name>`.
+    /// `csm <name>`: start (or resume) a session by name and launch Claude Code.
     #[command(external_subcommand)]
     Other(Vec<String>),
 }
@@ -113,19 +101,12 @@ fn main() {
 fn try_main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Cmd::Start {
-            name,
-            no_launch,
-            agents_md,
-        }) => cmd_start(&name, no_launch, agents_md),
         Some(Cmd::Other(vec)) => {
             let name = vec.first().cloned().unwrap_or_default();
             if name.is_empty() {
                 anyhow::bail!("missing session name");
             }
-            let no_launch = vec.iter().any(|a| a == "--no-launch" || a == "-n");
-            let agents_md = vec.iter().any(|a| a == "--agents-md");
-            cmd_start(&name, no_launch, agents_md)
+            cmd_start(&name)
         }
         Some(Cmd::List) => cmd_list(),
         Some(Cmd::Pin { name }) => {
@@ -148,7 +129,7 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
+fn cmd_start(name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let origin_pwd = cwd.display().to_string();
 
@@ -162,22 +143,6 @@ fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
         ui::epaint(ui::DIM, ui::ARROW),
         ui::epaint(ui::DIM, &ui::abbrev_path(&dir)),
     );
-
-    // Opt-in: inject the csm prompt into this repo's AGENTS.md for cross-agent
-    // (Cursor/Codex) support. Off by default to avoid touching tracked files.
-    if agents_md {
-        let p = inject::find_agents_md(&cwd).unwrap_or_else(|| cwd.join("AGENTS.md"));
-        inject::inject_file(&p)?;
-        ui::step("wrote", &format!("AGENTS.md {}", ui::abbrev_path(&p)));
-    }
-
-    if no_launch {
-        // For other coding agents: the user exports CSM_SESSION themselves, or
-        // points the agent at the workspace via `csm show`. Plain stdout so it
-        // can be `eval`'d - never styled.
-        println!("export CSM_SESSION={}", name);
-        return Ok(());
-    }
 
     // Launch Claude Code with CSM_SESSION env. The SessionStart hook (installed
     // via `csm init`) reads it and injects state.md. On /clear the env is still
@@ -218,7 +183,7 @@ fn cmd_pick_here() -> Result<()> {
     )? else {
         return Ok(());
     };
-    cmd_start(&name, false, false)
+    cmd_start(&name)
 }
 
 /// Print a numbered list of sessions (most recently accessed first) and read a
@@ -252,6 +217,7 @@ fn pick_session(
         "\n{} ",
         ui::epaint(ui::DIM, &format!("select a session (1-{}), 'q' to quit:", rows.len())),
     );
+    std::io::stderr().flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let line = line.trim();
