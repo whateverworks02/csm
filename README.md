@@ -96,6 +96,7 @@ per-terminal binding, used only for this in-process revival.)
 | `csm pin <name>` / `csm unpin <name>` | Pin / unpin (pinned sessions are never GC'd). |
 | `csm show [name]` | Print a session's workspace path, metadata, and `state.md`. Defaults to `$CSM_SESSION`, else opens a picker. |
 | `csm rm <name>` | Hard-delete a session (workspace dir + index entry). `--force` required for pinned; `--yes` skips confirm. |
+| `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
 | `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |
 | `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md`. |

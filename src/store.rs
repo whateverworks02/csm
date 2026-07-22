@@ -129,6 +129,55 @@ pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
     save_index(&idx)
 }
 
+/// Rename a session and re-point its `origin_pwd` to `new_origin_pwd`.
+///
+/// Moves the workspace dir (`<old>` -> `<new>`) and re-keys the index entry,
+/// preserving `created_at` and `pinned`; refreshes `last_access`. Errors if
+/// `old` doesn't exist or `new` already exists. If `old == new`, only re-points
+/// `origin_pwd` (a pure re-home, no dir move).
+pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> {
+    let mut idx = load_index()?;
+
+    if old == new {
+        let meta = idx
+            .sessions
+            .get_mut(old)
+            .with_context(|| format!("no csm session named {:?}", old))?;
+        meta.origin_pwd = new_origin_pwd.to_string();
+        meta.last_access = now_iso();
+        save_index(&idx)?;
+        return Ok(());
+    }
+
+    if idx.sessions.contains_key(new) {
+        anyhow::bail!("a session named {:?} already exists", new);
+    }
+    let meta = idx
+        .sessions
+        .get(old)
+        .with_context(|| format!("no csm session named {:?}", old))?
+        .clone();
+
+    // Move the workspace dir before mutating the index (fail cleanly).
+    let old_dir = session_dir(old)?;
+    let new_dir = session_dir(new)?;
+    if new_dir.exists() {
+        anyhow::bail!("workspace dir already exists: {}", new_dir.display());
+    }
+    if old_dir.exists() {
+        std::fs::rename(&old_dir, &new_dir)
+            .with_context(|| format!("renaming {} -> {}", old_dir.display(), new_dir.display()))?;
+    }
+
+    idx.sessions.remove(old);
+    let mut new_meta = meta;
+    new_meta.origin_pwd = new_origin_pwd.to_string();
+    new_meta.last_access = now_iso();
+    idx.sessions.insert(new.to_string(), new_meta);
+    save_index(&idx)?;
+    Ok(())
+}
+
 /// Hard-delete a session: remove its workspace dir and index entry.
 pub fn delete_session(name: &str) -> Result<()> {
     let mut idx = load_index()?;

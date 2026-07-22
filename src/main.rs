@@ -75,6 +75,9 @@ enum Cmd {
         yes: bool,
     },
 
+    /// Rename a session and re-point its origin_pwd to the current directory.
+    Rename { old: String, new: String },
+
     /// Show a session's workspace path and state.md.
     Show {
         /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
@@ -132,6 +135,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
+        Some(Cmd::Rename { old, new }) => cmd_rename(&old, &new),
         Some(Cmd::Show { name }) => cmd_show(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
         Some(Cmd::Init) => cmd_init(),
@@ -290,6 +294,26 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
     }
     store::delete_session(name)?;
     println!("deleted: {}", name);
+    Ok(())
+}
+
+/// `csm rename <old> <new>`: rename a session and re-point its `origin_pwd` to
+/// the current directory, so bare `csm` lists it here. Does not launch claude.
+/// `csm rename <name> <name>` is a pure re-home (rename to itself).
+fn cmd_rename(old: &str, new: &str) -> Result<()> {
+    let cwd = std::env::current_dir().context("getting current dir")?;
+    let origin_pwd = cwd.display().to_string();
+    store::rename_session(old, new, &origin_pwd)?;
+    let dir = store::session_dir(new)?;
+    if old == new {
+        eprintln!("csm: re-homed `{}` to {}", new, origin_pwd);
+    } else {
+        eprintln!(
+            "csm: renamed `{}` -> `{}`, re-homed to {}",
+            old, new, origin_pwd
+        );
+    }
+    eprintln!("csm: workspace: {}", dir.display());
     Ok(())
 }
 
