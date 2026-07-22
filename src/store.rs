@@ -56,10 +56,10 @@ pub fn parse_time(s: &str) -> Result<DateTime<Local>> {
 
 /// Format a stored timestamp (`last_access`/`created_at`) for display,
 /// falling back to the raw string if it can't be parsed.
-pub fn format_last_access(last_access: &str) -> String {
-    parse_time(last_access)
+pub fn format_ts(ts: &str) -> String {
+    parse_time(ts)
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_else(|_| last_access.to_string())
+        .unwrap_or_else(|_| ts.to_string())
 }
 
 pub fn load_index() -> Result<Index> {

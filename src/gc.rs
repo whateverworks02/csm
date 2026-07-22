@@ -2,9 +2,9 @@
 //! or deleted by gc. Deletion is a hard delete (workspace dir + index entry).
 
 use crate::store::{self, SessionMeta};
+use crate::ui;
 use anyhow::Result;
 use chrono::Local;
-use std::io::Write;
 
 pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let idx = store::load_index()?;
@@ -26,32 +26,43 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     candidates.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
 
     if candidates.is_empty() {
-        println!("no unpinned sessions to garbage-collect.");
+        eprintln!(
+            "{}",
+            ui::epaint(ui::DIM, "no unpinned sessions to garbage-collect.")
+        );
         return Ok(());
     }
 
     let to_delete: Vec<String> = if let Some(d) = older_than {
-        println!(
-            "unpinned sessions not accessed in the last {} day(s):",
-            d
+        eprintln!(
+            "{}",
+            ui::epaint(
+                ui::BOLD,
+                &format!("unpinned sessions not accessed in the last {d} day(s):")
+            ),
         );
         print_list(&candidates);
         if yes || confirm("delete all of the above?")? {
             candidates.iter().map(|(k, _)| k.clone()).collect()
         } else {
-            println!("aborted");
+            eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
             return Ok(());
         }
     } else {
-        println!("unpinned sessions:");
+        eprintln!("{}", ui::epaint(ui::BOLD, "unpinned sessions:"));
         print_list(&candidates);
-        print!("\nselect indices to delete (comma-separated), 'a' for all, 'q' to quit: ");
-        std::io::stdout().flush()?;
+        eprint!(
+            "\n{} ",
+            ui::epaint(
+                ui::DIM,
+                "select indices to delete (comma-separated), 'a' for all, 'q' to quit:"
+            ),
+        );
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
         let line = line.trim();
         if line.is_empty() || line.eq_ignore_ascii_case("q") {
-            println!("aborted");
+            eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
             return Ok(());
         }
         let selected: Vec<String> = if line.eq_ignore_ascii_case("a") {
@@ -69,16 +80,16 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
             out
         };
         if selected.is_empty() {
-            println!("nothing selected");
+            eprintln!("{}", ui::epaint(ui::DIM, "nothing selected"));
             return Ok(());
         }
         if !yes {
-            println!("\nwill delete:");
+            eprintln!("{}", ui::epaint(ui::BOLD, "will delete:"));
             for n in &selected {
-                println!("  - {}", n);
+                eprintln!("  {}", ui::epaint(ui::CYAN_BOLD, n));
             }
             if !confirm("proceed?")? {
-                println!("aborted");
+                eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
                 return Ok(());
             }
         }
@@ -87,8 +98,8 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
 
     for name in &to_delete {
         match store::delete_session(name) {
-            Ok(_) => println!("deleted: {}", name),
-            Err(e) => eprintln!("failed to delete {}: {}", name, e),
+            Ok(_) => ui::done("deleted", name),
+            Err(e) => eprintln!("{} {name}: {e}", ui::epaint(ui::RED_BOLD, "error:")),
         }
     }
     Ok(())
@@ -96,14 +107,23 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
 
 fn print_list(rows: &[(String, SessionMeta)]) {
     for (i, (name, m)) in rows.iter().enumerate() {
-        let last = store::format_last_access(&m.last_access);
-        println!("  [{}] {:<20} {:<20} {}", i + 1, name, last, m.origin_pwd);
+        let last = store::format_ts(&m.last_access);
+        eprintln!(
+            "  {}  {}  {}  {}",
+            ui::epaint(ui::DIM, &format!("{:>2}", i + 1)),
+            ui::epaint(ui::CYAN_BOLD, &format!("{:<20}", name)),
+            ui::epaint(ui::DIM, &format!("{:<16}", last)),
+            ui::epaint(ui::DIM, &ui::abbrev_home(&m.origin_pwd)),
+        );
     }
 }
 
 pub fn confirm(msg: &str) -> Result<bool> {
-    print!("{} [y/N] ", msg);
-    std::io::stdout().flush()?;
+    eprint!(
+        "{} {} ",
+        ui::epaint(ui::BOLD, msg),
+        ui::epaint(ui::DIM, "[y/N]"),
+    );
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     Ok(line.trim().eq_ignore_ascii_case("y"))

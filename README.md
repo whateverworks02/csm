@@ -104,6 +104,20 @@ per-terminal binding, used only for this in-process revival.)
 
 **GC is a hard delete.** Pinned sessions are never listed or deleted by `gc`.
 
+## Output & color
+
+csm follows the cargo/bun convention: **status and progress go to stderr** (so
+they never pollute piped stdout), while **data goes to stdout** (`csm list`,
+`csm show`). Output is colorized when writing to a terminal and automatically
+stripped when piped, honoring `NO_COLOR` (disable) and `CLICOLOR_FORCE` (force
+on). The style is cargo-like restraint - color, not icons: paths are
+abbreviated with `~`, `*` marks pinned sessions, and errors use cargo's red
+`error:` prefix.
+
+Machine-readable contracts are never styled: `csm <name> --no-launch` prints a
+plain `export CSM_SESSION=<name>` on stdout (safe to `eval`), and `csm hook`
+emits pure JSON on stdout.
+
 ## How the hook works
 
 `csm init` adds to `~/.claude/settings.json`:

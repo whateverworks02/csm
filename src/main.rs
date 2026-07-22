@@ -17,16 +17,13 @@ mod hook;
 mod inject;
 mod prompt;
 mod store;
+mod ui;
 mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
-
-/// Printed when a command finds no sessions (e.g. `csm list`, the `csm show` picker).
-const NO_SESSIONS_HINT: &str = "no csm sessions. start one with: csm <name>";
 
 #[derive(Parser)]
 #[command(
@@ -106,7 +103,14 @@ enum Cmd {
     Other(Vec<String>),
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(e) = try_main() {
+        ui::print_error(&e);
+        std::process::exit(1);
+    }
+}
+
+fn try_main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Cmd::Start {
@@ -126,12 +130,12 @@ fn main() -> Result<()> {
         Some(Cmd::List) => cmd_list(),
         Some(Cmd::Pin { name }) => {
             store::set_pinned(&name, true)?;
-            println!("pinned: {}", name);
+            ui::done("pinned", &name);
             Ok(())
         }
         Some(Cmd::Unpin { name }) => {
             store::set_pinned(&name, false)?;
-            println!("unpinned: {}", name);
+            ui::done("unpinned", &name);
             Ok(())
         }
         Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
@@ -152,19 +156,25 @@ fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
     workspace::ensure_workspace(name, &meta)?;
 
     let dir = store::session_dir(name)?;
-    eprintln!("csm: session `{}` -> {}", name, dir.display());
+    eprintln!(
+        "{} {} {}",
+        ui::epaint(ui::CYAN_BOLD, name),
+        ui::epaint(ui::DIM, ui::ARROW),
+        ui::epaint(ui::DIM, &ui::abbrev_path(&dir)),
+    );
 
     // Opt-in: inject the csm prompt into this repo's AGENTS.md for cross-agent
     // (Cursor/Codex) support. Off by default to avoid touching tracked files.
     if agents_md {
         let p = inject::find_agents_md(&cwd).unwrap_or_else(|| cwd.join("AGENTS.md"));
         inject::inject_file(&p)?;
-        eprintln!("csm: AGENTS.md: {}", p.display());
+        ui::step("wrote", &format!("AGENTS.md {}", ui::abbrev_path(&p)));
     }
 
     if no_launch {
         // For other coding agents: the user exports CSM_SESSION themselves, or
-        // points the agent at the workspace via `csm show`.
+        // points the agent at the workspace via `csm show`. Plain stdout so it
+        // can be `eval`'d - never styled.
         println!("export CSM_SESSION={}", name);
         return Ok(());
     }
@@ -172,6 +182,7 @@ fn cmd_start(name: &str, no_launch: bool, agents_md: bool) -> Result<()> {
     // Launch Claude Code with CSM_SESSION env. The SessionStart hook (installed
     // via `csm init`) reads it and injects state.md. On /clear the env is still
     // present (same process), so the hook revives the workspace memory.
+    eprintln!("{}", ui::epaint(ui::DIM, "launching claude..."));
     let status = Command::new("claude")
         .env("CSM_SESSION", name)
         .status()
@@ -193,11 +204,18 @@ fn cmd_pick_here() -> Result<()> {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if rows.is_empty() {
-        println!("no csm sessions for {}.", cwd_str);
-        println!("start one with: csm <name>");
+        eprintln!(
+            "{} {}",
+            ui::epaint(ui::DIM, "no csm sessions for"),
+            ui::epaint(ui::BOLD, &ui::abbrev_home(&cwd_str)),
+        );
+        ui::hint("start one with: csm <name>");
         return Ok(());
     }
-    let Some(name) = pick_session(&format!("sessions for {}", cwd_str), rows)? else {
+    let Some(name) = pick_session(
+        &format!("sessions for {}", ui::abbrev_home(&cwd_str)),
+        rows,
+    )? else {
         return Ok(());
     };
     cmd_start(&name, false, false)
@@ -206,31 +224,49 @@ fn cmd_pick_here() -> Result<()> {
 /// Print a numbered list of sessions (most recently accessed first) and read a
 /// 1-based selection from stdin. Returns the chosen name, or `None` if the user
 /// aborted (empty/`q`) or entered an invalid index. `rows` must be non-empty;
-/// callers handle the empty case with their own message.
+/// callers handle the empty case with their own message. List and prompt go to
+/// stderr so stdout stays clean for piping.
 fn pick_session(
     label: &str,
     mut rows: Vec<(String, store::SessionMeta)>,
 ) -> Result<Option<String>> {
     rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
-    println!("{}:", label);
+    eprintln!("{}:", ui::epaint(ui::BOLD, label));
     for (i, (name, m)) in rows.iter().enumerate() {
-        let last = store::format_last_access(&m.last_access);
-        let pin = if m.pinned { "*" } else { "" };
-        println!("  [{}] {:<20} {:<2} {:<16} {}", i + 1, name, pin, last, m.origin_pwd);
+        let last = store::format_ts(&m.last_access);
+        let pin = if m.pinned {
+            format!(" {}", ui::epaint(ui::YELLOW, ui::PIN_MARK))
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "  {}  {}  {}  {}{}",
+            ui::epaint(ui::DIM, &format!("{:>2}", i + 1)),
+            ui::epaint(ui::CYAN_BOLD, &format!("{:<20}", name)),
+            ui::epaint(ui::DIM, &format!("{:<16}", last)),
+            ui::epaint(ui::DIM, &ui::abbrev_home(&m.origin_pwd)),
+            pin,
+        );
     }
-    print!("\nselect a session (1-{}), 'q' to quit: ", rows.len());
-    std::io::stdout().flush()?;
+    eprint!(
+        "\n{} ",
+        ui::epaint(ui::DIM, &format!("select a session (1-{}), 'q' to quit:", rows.len())),
+    );
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let line = line.trim();
     if line.is_empty() || line.eq_ignore_ascii_case("q") {
-        println!("aborted");
+        eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
         return Ok(None);
     }
     match line.parse::<usize>() {
         Ok(i) if i >= 1 && i <= rows.len() => Ok(Some(rows[i - 1].0.clone())),
         _ => {
-            eprintln!("invalid selection: {}", line);
+            eprintln!(
+                "{} {}",
+                ui::epaint(ui::RED_BOLD, "invalid selection:"),
+                line,
+            );
             Ok(None)
         }
     }
@@ -241,7 +277,7 @@ fn pick_session(
 fn pick_session_all() -> Result<Option<String>> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
-        println!("{NO_SESSIONS_HINT}");
+        ui::no_sessions_hint();
         return Ok(None);
     }
     let rows: Vec<(String, store::SessionMeta)> = idx
@@ -255,19 +291,28 @@ fn pick_session_all() -> Result<Option<String>> {
 fn cmd_list() -> Result<()> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
-        println!("{NO_SESSIONS_HINT}");
+        ui::no_sessions_hint();
         return Ok(());
     }
     let mut rows: Vec<_> = idx.sessions.iter().collect();
     rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
     println!(
-        "{:<20} {:<4} {:<20} ORIGIN",
-        "NAME", "PIN", "LAST ACCESS"
+        "{}  {}  {}  {}",
+        ui::paint(ui::DIM, &format!("{:<20}", "NAME")),
+        ui::paint(ui::DIM, &format!("{:<4}", "PIN")),
+        ui::paint(ui::DIM, &format!("{:<19}", "LAST ACCESS")),
+        ui::paint(ui::DIM, "ORIGIN"),
     );
     for (name, m) in rows {
-        let last = store::format_last_access(&m.last_access);
-        let pin = if m.pinned { "*" } else { "" };
-        println!("{:<20} {:<4} {:<20} {}", name, pin, last, m.origin_pwd);
+        let last = store::format_ts(&m.last_access);
+        let pin_field = if m.pinned { ui::PIN_MARK } else { "" };
+        println!(
+            "{}  {}  {}  {}",
+            ui::paint(ui::CYAN_BOLD, &format!("{:<20}", name)),
+            ui::paint(ui::YELLOW, &format!("{:<4}", pin_field)),
+            ui::paint(ui::DIM, &format!("{:<19}", last)),
+            ui::paint(ui::DIM, &ui::abbrev_home(&m.origin_pwd)),
+        );
     }
     Ok(())
 }
@@ -283,17 +328,18 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
     }
     if !yes {
         let dir = store::session_dir(name)?;
-        if !gc::confirm(&format!(
+        let msg = format!(
             "delete session `{}` and its workspace at {}?",
             name,
-            dir.display()
-        ))? {
-            println!("aborted");
+            ui::abbrev_path(&dir),
+        );
+        if !gc::confirm(&msg)? {
+            eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
             return Ok(());
         }
     }
     store::delete_session(name)?;
-    println!("deleted: {}", name);
+    ui::done("deleted", name);
     Ok(())
 }
 
@@ -306,14 +352,31 @@ fn cmd_rename(old: &str, new: &str) -> Result<()> {
     store::rename_session(old, new, &origin_pwd)?;
     let dir = store::session_dir(new)?;
     if old == new {
-        eprintln!("csm: re-homed `{}` to {}", new, origin_pwd);
+        eprintln!(
+            "{} {} {}",
+            ui::epaint(ui::GREEN_BOLD, "re-homed"),
+            ui::epaint(ui::CYAN_BOLD, new),
+            ui::epaint(ui::DIM, &format!("to {}", ui::abbrev_home(&origin_pwd))),
+        );
     } else {
         eprintln!(
-            "csm: renamed `{}` -> `{}`, re-homed to {}",
-            old, new, origin_pwd
+            "{} {} {} {}",
+            ui::epaint(ui::GREEN_BOLD, "renamed"),
+            ui::epaint(ui::CYAN_BOLD, old),
+            ui::epaint(ui::DIM, ui::ARROW),
+            ui::epaint(ui::CYAN_BOLD, new),
+        );
+        eprintln!(
+            "  {} {}",
+            ui::epaint(ui::DIM, "re-homed to"),
+            ui::epaint(ui::DIM, &ui::abbrev_home(&origin_pwd)),
         );
     }
-    eprintln!("csm: workspace: {}", dir.display());
+    eprintln!(
+        "  {}  {}",
+        ui::epaint(ui::DIM, "workspace"),
+        ui::epaint(ui::DIM, &ui::abbrev_path(&dir)),
+    );
     Ok(())
 }
 
@@ -334,24 +397,51 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         .get(&name)
         .with_context(|| format!("no csm session named {:?}", name))?;
     let dir = store::session_dir(&name)?;
-    println!("session: {}", name);
-    println!("workspace: {}", dir.display());
-    println!("origin: {}", meta.origin_pwd);
-    println!("created: {}", meta.created_at);
-    println!("last access: {}", meta.last_access);
-    println!("pinned: {}", meta.pinned);
+    println!("{}", ui::paint(ui::CYAN_BOLD, &name));
+    println!(
+        "  {} {}",
+        ui::paint(ui::DIM, &format!("{:<11}", "workspace")),
+        ui::paint(ui::DIM, &ui::abbrev_path(&dir)),
+    );
+    println!(
+        "  {} {}",
+        ui::paint(ui::DIM, &format!("{:<11}", "origin")),
+        ui::paint(ui::DIM, &ui::abbrev_home(&meta.origin_pwd)),
+    );
+    println!(
+        "  {} {}",
+        ui::paint(ui::DIM, &format!("{:<11}", "created")),
+        ui::paint(ui::DIM, &store::format_ts(&meta.created_at)),
+    );
+    println!(
+        "  {} {}",
+        ui::paint(ui::DIM, &format!("{:<11}", "last access")),
+        ui::paint(ui::DIM, &store::format_ts(&meta.last_access)),
+    );
+    let pinned_str = if meta.pinned { "yes" } else { "no" };
+    let pinned_styled = if meta.pinned {
+        ui::paint(ui::YELLOW, pinned_str)
+    } else {
+        ui::paint(ui::DIM, pinned_str)
+    };
+    println!(
+        "  {} {}",
+        ui::paint(ui::DIM, &format!("{:<11}", "pinned")),
+        pinned_styled,
+    );
     println!();
     let state = workspace::read_state_md(&name)
         .unwrap_or_else(|| "(state.md not found)".to_string());
-    println!("--- state.md ---");
+    println!("{}", ui::paint(ui::DIM, "--- state.md ---"));
     println!("{}", state);
     let scripts = workspace::list_scripts(&name);
-    println!("--- scripts/ ---");
+    println!();
+    println!("{}", ui::paint(ui::DIM, "--- scripts/ ---"));
     if scripts.is_empty() {
-        println!("(none)");
+        println!("  {}", ui::paint(ui::DIM, "(none)"));
     } else {
         for s in scripts {
-            println!("{}", s);
+            println!("  {}", s);
         }
     }
     Ok(())
@@ -377,24 +467,34 @@ fn cmd_init() -> Result<()> {
     };
     if ensure_sessionstart_hook(&mut root) {
         std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-        println!("csm: wrote SessionStart hook to {}", settings_path.display());
+        ui::step(
+            "wrote",
+            &format!("SessionStart hook to {}", ui::abbrev_path(&settings_path)),
+        );
     } else {
-        println!(
-            "csm: SessionStart hook already present in {}",
-            settings_path.display()
+        eprintln!(
+            "{} {}",
+            ui::epaint(ui::DIM, "SessionStart hook already present at"),
+            ui::epaint(ui::DIM, &ui::abbrev_path(&settings_path)),
         );
     }
 
     // 2. Inject the csm working-mode prompt into the global CLAUDE.md.
     let claude_md = inject::claude_md_path()?;
     inject::inject_file(&claude_md)?;
-    println!("csm: injected prompt into {}", claude_md.display());
+    ui::step(
+        "injected",
+        &format!("prompt into {}", ui::abbrev_path(&claude_md)),
+    );
 
     match which_csm() {
-        Some(p) => println!("csm: found on PATH at {}", p.display()),
-        None => eprintln!(
-            "csm: warning: `csm` not found on PATH; the hook command `csm hook` will fail.\n\
-             install with `cargo install --path .` (ensure ~/.cargo/bin is on PATH)."
+        Some(p) => ui::step(
+            "found",
+            &format!("csm on PATH at {}", ui::abbrev_path(&p)),
+        ),
+        None => ui::warn(
+            "`csm` not on PATH; the hook command `csm hook` will fail. \
+             install with `cargo install --path .` (ensure ~/.cargo/bin is on PATH).",
         ),
     }
     Ok(())
