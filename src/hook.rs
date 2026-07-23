@@ -48,7 +48,9 @@ pub fn run_hook() -> Result<()> {
     Ok(())
 }
 
-fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: bool) -> String {
+/// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
+/// (capped), a `progress.md` tail, and the scripts list.
+pub(crate) fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: bool) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -66,7 +68,6 @@ fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: bool) -> St
     format!(
         "[csm] Active workspace memory session: \"{name}\" (started from `{origin_pwd}`, source={src}, pinned={pinned}).
 Workspace directory: {dir}
-Follow the csm working mode (see the csm workspace memory section in your context): orient on state.md, append to progress.md, maintain scripts/INDEX.md.
 
 --- state.md ---
 {state}
@@ -77,6 +78,13 @@ Follow the csm working mode (see the csm workspace memory section in your contex
 --- scripts/ (see scripts/INDEX.md) ---
 {scripts_line}"
     )
+}
+
+/// Build the snapshot for a session looked up by name (source defaults to
+/// "startup"). Used by agents that inject at launch (pi) and anywhere the
+/// hook's event `source` isn't available.
+pub(crate) fn context_for_session(name: &str, meta: &store::SessionMeta) -> String {
+    build_context(name, &meta.origin_pwd, "startup", meta.pinned)
 }
 
 fn read_state_capped(name: &str) -> String {

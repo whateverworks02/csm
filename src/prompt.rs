@@ -13,7 +13,7 @@ pub fn csm_block() -> String {
     format!("{}\n{}\n{}", CSM_MARK_BEGIN, PROMPT_BODY, CSM_MARK_END)
 }
 
-const PROMPT_BODY: &str = r#"## csm workspace memory
+pub(crate) const PROMPT_BODY: &str = r#"## csm workspace memory
 
 A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `progress.md` at `~/.csm/sessions/$CSM_SESSION/` (a `[csm]` block, if present, is only a snapshot of these). If `$CSM_SESSION` is unset, there is no csm session. **Keeping `state.md` / `progress.md` current is your job, not csm's.**
 
