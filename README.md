@@ -5,9 +5,9 @@
 csm gives every task a durable, agent-neutral workspace memory directory. Start
 a session with `csm <name>` (default agent: Claude Code); csm then injects the
 session's `state.md` on start / `/clear` - Claude Code via its SessionStart
-hook, `pi` via `--append-system-prompt` at launch - and the working-mode prompt
-tells the coding agent how to maintain it. Pick an agent with `--agent`:
-`csm my-task --agent pi`.
+hook, `pi` via `--append-system-prompt` at launch. The working-mode prompt lives
+in each agent's own global instructions file (`~/.claude/CLAUDE.md`,
+`~/.pi/agent/CLAUDE.md`). Pick an agent with `--agent`: `csm my-task --agent pi`.
 
 ```
 ~/.csm/
@@ -48,12 +48,12 @@ instructions.
 
 ```sh
 cargo install --path .     # puts `csm` on ~/.cargo/bin (ensure it's on PATH)
-csm init                   # installs the SessionStart hook + injects the prompt into ~/.claude/CLAUDE.md
+csm init                   # installs the SessionStart hook + injects the prompt into ~/.claude/CLAUDE.md and ~/.pi/agent/CLAUDE.md
 ```
 
 `csm init` is idempotent - it adds a single `SessionStart` hook (`csm hook`) to
-`~/.claude/settings.json` and a marked block to `~/.claude/CLAUDE.md`, leaving
-all your other settings/content untouched.
+`~/.claude/settings.json` and a marked block to both `~/.claude/CLAUDE.md` and
+`~/.pi/agent/CLAUDE.md`, leaving all your other settings/content untouched.
 
 ## Quickstart
 
@@ -63,6 +63,14 @@ csm my-task                 # create/refresh session "my-task", launch claude (d
 csm my-task --agent pi      # same session, launch pi instead
 ```
 
+Tip: if you use pi often, add a shell alias so `csp <name>` is shorthand for
+`csm <name> --agent pi`:
+
+```sh
+# in ~/.zshrc / ~/.bashrc
+alias csp='csm --agent pi'        # then: csp my-task
+```
+
 What happens on `csm <name> [--agent <x>]`:
 - creates the session in `index.json` (recording `origin_pwd`) if new,
   refreshes `last_access` otherwise;
@@ -70,7 +78,7 @@ What happens on `csm <name> [--agent <x>]`:
   missing;
 - launches the agent via its agent adapter. Claude Code runs `claude` with
   `CSM_SESSION=<name>` (its SessionStart hook injects `state.md` on start /
-  `/clear`); `pi` runs `pi` with `--append-system-prompt <prompt+state>` and
+  `/clear`); `pi` runs `pi` with `--append-system-prompt <state>` and
   `--session-dir` co-located under the workspace.
 
 It does **not** modify any file in your repo (the working-mode prompt is global,
@@ -102,7 +110,7 @@ per-terminal binding, used only for this in-process revival.)
 | `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
 | `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |
-| `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md`. |
+| `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`. |
 | `csm hook` | Internal - the `SessionStart` hook handler (reads stdin JSON). |
 
 **GC is a hard delete.** Pinned sessions are never listed or deleted by `gc`.
@@ -144,14 +152,15 @@ stdout contains **only** the JSON object; all diagnostics go to stderr.
 ## Cross-repo
 
 The workspace is just markdown + scripts. Supported agents: Claude Code
-(`--agent claude`, default) and `pi` (`--agent pi`). Claude Code carries the
-working mode in the global `CLAUDE.md` (injected by `csm init`) and auto-injects
-`state.md` on start / `/clear` via its SessionStart hook. `pi` has no global
-instructions file or hooks, so csm injects both the working mode and the state
-snapshot at launch via `--append-system-prompt` (there is no in-process `/clear`
-revival - resume the pi session instead). The workspace is plain files, so you
-can point any other agent at `~/.csm/sessions/<name>/` by hand; adding an agent
-is "implement the `Agent` trait + add a match arm" (see `src/agent.rs`).
+(`--agent claude`, default) and `pi` (`--agent pi`). Both carry the working-mode
+prompt in a persistent global file they auto-discover - Claude in
+`~/.claude/CLAUDE.md`, pi in `~/.pi/agent/CLAUDE.md` (both written by `csm
+init`). At runtime only the per-session state snapshot is injected: Claude via
+its SessionStart hook (revives on `/clear`); pi at launch via
+`--append-system-prompt` (no in-process `/clear` revival - resume the pi session
+instead). The workspace is plain files, so you can point any other agent at
+`~/.csm/sessions/<name>/` by hand; adding an agent is "implement the `Agent`
+trait + add a match arm" (see `src/agent.rs`).
 
 **Cross-repo**: the session **name** is the shared handle. Run `csm my-task` in
 both the frontend and backend repos; the same
@@ -170,7 +179,8 @@ session name in commits/PRs.
   the initial scaffold. All updates are the agent's responsibility, guided by
   the `CLAUDE.md` prompt.
 - **No repo pollution.** The working-mode prompt lives in the global
-  `~/.claude/CLAUDE.md`; `csm <name>` never touches repo files.
+  `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`; `csm <name>` never touches
+  repo files.
 
 ## Uninstall
 

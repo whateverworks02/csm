@@ -82,8 +82,9 @@ enum Cmd {
         yes: bool,
     },
 
-    /// Install the SessionStart hook into ~/.claude/settings.json and inject
-    /// the csm working-mode prompt into ~/.claude/CLAUDE.md.
+    /// Install agent wiring: the SessionStart hook into ~/.claude/settings.json
+    /// and the csm working-mode prompt into ~/.claude/CLAUDE.md and
+    /// ~/.pi/agent/CLAUDE.md.
     Init,
 
     /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
@@ -453,9 +454,9 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 }
 
 fn cmd_init() -> Result<()> {
-    // Install the default agent's (Claude Code) state-injection wiring.
-    // Other agents (e.g. pi) need no global install.
-    agent::agent_for("claude")?.install()?;
+    // Install every known agent's global state-injection wiring (Claude's
+    // SessionStart hook + CLAUDE.md, pi's CLAUDE.md). Idempotent.
+    agent::install_all()?;
     match which_csm() {
         Some(p) => ui::step(
             "found",

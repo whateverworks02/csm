@@ -18,6 +18,19 @@ pub fn claude_md_path() -> Result<PathBuf> {
     Ok(claude_dir()?.join("CLAUDE.md"))
 }
 
+/// Path to the pi global agent dir (`~/.pi/agent`). pi auto-discovers
+/// `CLAUDE.md`/`AGENTS.md` here as a context file - the direct analog of
+/// Claude's `~/.claude/CLAUDE.md`.
+pub fn pi_dir() -> Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".pi").join("agent"))
+}
+
+/// Path to the pi global CLAUDE.md (`~/.pi/agent/CLAUDE.md`).
+pub fn pi_claude_md_path() -> Result<PathBuf> {
+    Ok(pi_dir()?.join("CLAUDE.md"))
+}
+
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
 /// dirs if missing. Idempotent. Returns (path, modified).
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
@@ -104,6 +117,28 @@ pub fn install_claude() -> Result<()> {
             "{} {}",
             ui::epaint(ui::DIM, "prompt already present at"),
             ui::epaint(ui::DIM, &ui::abbrev_path(&claude_md)),
+        );
+    }
+    Ok(())
+}
+
+/// Install pi's state-injection wiring: the csm working-mode block in
+/// `~/.pi/agent/CLAUDE.md`. pi discovers this file at launch (no hook needed),
+/// so the per-session state snapshot is all that's passed at launch time.
+/// Idempotent. This is `PiAgent::install`.
+pub fn install_pi() -> Result<()> {
+    let pi_md = pi_claude_md_path()?;
+    let (_, modified) = inject_file(&pi_md)?;
+    if modified {
+        ui::step(
+            "injected",
+            &format!("prompt into {}", ui::abbrev_path(&pi_md)),
+        );
+    } else {
+        eprintln!(
+            "{} {}",
+            ui::epaint(ui::DIM, "prompt already present at"),
+            ui::epaint(ui::DIM, &ui::abbrev_path(&pi_md)),
         );
     }
     Ok(())
