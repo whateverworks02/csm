@@ -88,7 +88,8 @@ pub(crate) fn context_for_session(name: &str, meta: &store::SessionMeta) -> Stri
 }
 
 fn read_state_capped(name: &str) -> String {
-    let state = workspace::read_state_md(name).unwrap_or_else(|| "(state.md not found)".to_string());
+    let state =
+        workspace::read_state_md(name).unwrap_or_else(|| "(state.md not found)".to_string());
     if state.chars().count() <= STATE_CAP {
         return state;
     }

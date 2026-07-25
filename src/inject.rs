@@ -156,15 +156,12 @@ fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
         .is_some_and(|groups| {
             groups.iter().any(|g| {
                 g.get("matcher") == Some(&serde_json::json!(""))
-                    && g
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .is_some_and(|hs| {
-                            hs.iter().any(|h| {
-                                h.get("type") == Some(&serde_json::json!("command"))
-                                    && h.get("command") == Some(&serde_json::json!(CMD))
-                            })
+                    && g.get("hooks").and_then(|h| h.as_array()).is_some_and(|hs| {
+                        hs.iter().any(|h| {
+                            h.get("type") == Some(&serde_json::json!("command"))
+                                && h.get("command") == Some(&serde_json::json!(CMD))
                         })
+                    })
             })
         });
     if already {

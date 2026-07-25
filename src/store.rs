@@ -67,13 +67,13 @@ pub fn load_index() -> Result<Index> {
     if !path.exists() {
         return Ok(Index::default());
     }
-    let data = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let data =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     if data.trim().is_empty() {
         return Ok(Index::default());
     }
-    let idx: Index = serde_json::from_str(&data)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let idx: Index =
+        serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
     Ok(idx)
 }
 
@@ -91,12 +91,15 @@ pub fn save_index(idx: &Index) -> Result<()> {
 /// `origin_pwd` is only used at creation; it is never overwritten.
 pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
     let mut idx = load_index()?;
-    let meta = idx.sessions.entry(name.to_string()).or_insert_with(|| SessionMeta {
-        origin_pwd: origin_pwd.to_string(),
-        created_at: now_iso(),
-        last_access: now_iso(),
-        pinned: false,
-    });
+    let meta = idx
+        .sessions
+        .entry(name.to_string())
+        .or_insert_with(|| SessionMeta {
+            origin_pwd: origin_pwd.to_string(),
+            created_at: now_iso(),
+            last_access: now_iso(),
+            pinned: false,
+        });
     meta.last_access = now_iso();
     let clone = meta.clone();
     save_index(&idx)?;
@@ -188,8 +191,7 @@ pub fn delete_session(name: &str) -> Result<()> {
     save_index(&idx)?;
     let dir = session_dir(name)?;
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("removing {}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     }
     Ok(())
 }
