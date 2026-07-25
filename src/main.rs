@@ -156,13 +156,10 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
         "{}",
         ui::epaint(ui::DIM, &format!("launching {}...", agent_adapter.id())),
     );
-    let status = agent_adapter
-        .launch(name, &meta)
-        .status()
-        .context(format!(
-            "failed to launch {} (is it installed and on PATH?)",
-            agent_adapter.id()
-        ))?;
+    let status = agent_adapter.launch(name, &meta).status().context(format!(
+        "failed to launch {} (is it installed and on PATH?)",
+        agent_adapter.id()
+    ))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -217,10 +214,8 @@ fn cmd_pick_here() -> Result<()> {
         ui::hint("start one with: csm <name>");
         return Ok(());
     }
-    let Some(name) = pick_session(
-        &format!("sessions for {}", ui::abbrev_home(&cwd_str)),
-        rows,
-    )? else {
+    let Some(name) = pick_session(&format!("sessions for {}", ui::abbrev_home(&cwd_str)), rows)?
+    else {
         return Ok(());
     };
     cmd_start(&name, "claude")
@@ -255,7 +250,10 @@ fn pick_session(
     }
     eprint!(
         "\n{} ",
-        ui::epaint(ui::DIM, &format!("select a session (1-{}), 'q' to quit:", rows.len())),
+        ui::epaint(
+            ui::DIM,
+            &format!("select a session (1-{}), 'q' to quit:", rows.len())
+        ),
     );
     std::io::stderr().flush()?;
     let mut line = String::new();
@@ -330,7 +328,10 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
         .get(name)
         .with_context(|| format!("no csm session named {:?}", name))?;
     if meta.pinned && !force {
-        anyhow::bail!("session `{}` is pinned; pass --force to delete anyway", name);
+        anyhow::bail!(
+            "session `{}` is pinned; pass --force to delete anyway",
+            name
+        );
     }
     if !yes {
         let dir = store::session_dir(name)?;
@@ -392,7 +393,9 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         None => match std::env::var("CSM_SESSION") {
             Ok(n) if !n.is_empty() => n,
             _ => {
-                let Some(n) = pick_session_all()? else { return Ok(()) };
+                let Some(n) = pick_session_all()? else {
+                    return Ok(());
+                };
                 n
             }
         },
@@ -436,8 +439,8 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         pinned_styled,
     );
     println!();
-    let state = workspace::read_state_md(&name)
-        .unwrap_or_else(|| "(state.md not found)".to_string());
+    let state =
+        workspace::read_state_md(&name).unwrap_or_else(|| "(state.md not found)".to_string());
     println!("{}", ui::paint(ui::DIM, "--- state.md ---"));
     println!("{}", state);
     let scripts = workspace::list_scripts(&name);
@@ -458,10 +461,7 @@ fn cmd_init() -> Result<()> {
     // SessionStart hook + CLAUDE.md, pi's CLAUDE.md). Idempotent.
     agent::install_all()?;
     match which_csm() {
-        Some(p) => ui::step(
-            "found",
-            &format!("csm on PATH at {}", ui::abbrev_path(&p)),
-        ),
+        Some(p) => ui::step("found", &format!("csm on PATH at {}", ui::abbrev_path(&p))),
         None => ui::warn(
             "`csm` not on PATH; the hook command `csm hook` will fail. \
              install with `cargo install --path .` (ensure ~/.cargo/bin is on PATH).",

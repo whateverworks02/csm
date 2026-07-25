@@ -20,10 +20,18 @@ use anstyle::{AnsiColor, Color, Style};
 pub const BOLD: Style = Style::new().bold();
 pub const DIM: Style = Style::new().dimmed();
 pub const YELLOW: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-pub const GREEN_BOLD: Style = Style::new().bold().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-pub const RED_BOLD: Style = Style::new().bold().fg_color(Some(Color::Ansi(AnsiColor::Red)));
-pub const CYAN_BOLD: Style = Style::new().bold().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-pub const YELLOW_BOLD: Style = Style::new().bold().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+pub const GREEN_BOLD: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Green)));
+pub const RED_BOLD: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)));
+pub const CYAN_BOLD: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+pub const YELLOW_BOLD: Style = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 
 /// ASCII arrow for transformations (rename) and hints. Plain text, not an icon.
 pub const ARROW: &str = "->";
