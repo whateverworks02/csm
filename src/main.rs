@@ -7,11 +7,14 @@
 //!      `~/.claude/CLAUDE.md` (by `csm init`), plus a SessionStart hook that
 //!      auto-injects the active session's `state.md`.
 //!
-//! Launching: `csm <name>` sets up / refreshes the session, then runs `claude`
-//! with `CSM_SESSION=<name>`. On `/clear`, Claude Code fires SessionStart again
-//! (source=clear); the hook reads `CSM_SESSION` (still set, same process) and
-//! re-injects `state.md` - reviving the workspace memory.
+//! Launching: `csm <name>` sets up / refreshes the session, then launches the
+//! agent via a per-agent adapter (`--agent`, default `claude`). The Claude
+//! adapter runs `claude` with `CSM_SESSION=<name>`; on `/clear`, Claude Code
+//! fires SessionStart again (source=clear), the hook reads `CSM_SESSION` (still
+//! set, same process) and re-injects `state.md` - reviving the workspace memory.
+//! Other agents (e.g. `pi`) inject at launch instead; see `agent.rs`.
 
+mod agent;
 mod gc;
 mod hook;
 mod inject;
@@ -79,8 +82,9 @@ enum Cmd {
         yes: bool,
     },
 
-    /// Install the SessionStart hook into ~/.claude/settings.json and inject
-    /// the csm working-mode prompt into ~/.claude/CLAUDE.md.
+    /// Install agent wiring: the SessionStart hook into ~/.claude/settings.json
+    /// and the csm working-mode prompt into ~/.claude/CLAUDE.md and
+    /// ~/.pi/agent/CLAUDE.md.
     Init,
 
     /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
@@ -102,11 +106,8 @@ fn try_main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Cmd::Other(vec)) => {
-            let name = vec.first().cloned().unwrap_or_default();
-            if name.is_empty() {
-                anyhow::bail!("missing session name");
-            }
-            cmd_start(&name)
+            let (name, agent) = parse_start_args(vec)?;
+            cmd_start(&name, &agent)
         }
         Some(Cmd::List) => cmd_list(),
         Some(Cmd::Pin { name }) => {
@@ -129,7 +130,11 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn cmd_start(name: &str) -> Result<()> {
+fn cmd_start(name: &str, agent: &str) -> Result<()> {
+    // Resolve the agent adapter first so an unknown agent id errors before we
+    // create or touch any session.
+    let agent_adapter = agent::agent_for(agent)?;
+
     let cwd = std::env::current_dir().context("getting current dir")?;
     let origin_pwd = cwd.display().to_string();
 
@@ -144,15 +149,50 @@ fn cmd_start(name: &str) -> Result<()> {
         ui::epaint(ui::DIM, &ui::abbrev_path(&dir)),
     );
 
-    // Launch Claude Code with CSM_SESSION env. The SessionStart hook (installed
-    // via `csm init`) reads it and injects state.md. On /clear the env is still
-    // present (same process), so the hook revives the workspace memory.
-    eprintln!("{}", ui::epaint(ui::DIM, "launching claude..."));
-    let status = Command::new("claude")
-        .env("CSM_SESSION", name)
+    // Launch the agent via its adapter. Each adapter decides binary, args,
+    // env, and how/when state is injected (Claude: env + SessionStart hook;
+    // pi: --append-system-prompt at launch).
+    eprintln!(
+        "{}",
+        ui::epaint(ui::DIM, &format!("launching {}...", agent_adapter.id())),
+    );
+    let status = agent_adapter
+        .launch(name, &meta)
         .status()
-        .context("failed to launch `claude` (is Claude Code installed and on PATH?)")?;
+        .context(format!(
+            "failed to launch {} (is it installed and on PATH?)",
+            agent_adapter.id()
+        ))?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Parse `csm <name> [--agent <x>|-a <x>|--agent=<x>]` from the
+/// external-subcommand arg vec. `agent` defaults to "claude".
+fn parse_start_args(args: Vec<String>) -> Result<(String, String)> {
+    let mut name = String::new();
+    let mut agent = String::from("claude");
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if let Some(v) = a.strip_prefix("--agent=") {
+            agent = v.to_string();
+        } else if a == "--agent" || a == "-a" {
+            i += 1;
+            agent = args
+                .get(i)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("--agent requires a value"))?;
+        } else if name.is_empty() {
+            name = a.clone();
+        } else {
+            anyhow::bail!("unexpected argument: {a:?} (usage: csm <name> [--agent <x>])");
+        }
+        i += 1;
+    }
+    if name.is_empty() {
+        anyhow::bail!("missing session name");
+    }
+    Ok((name, agent))
 }
 
 /// Bare `csm` (no subcommand): list sessions whose `origin_pwd` is the current
@@ -183,7 +223,7 @@ fn cmd_pick_here() -> Result<()> {
     )? else {
         return Ok(());
     };
-    cmd_start(&name)
+    cmd_start(&name, "claude")
 }
 
 /// Print a numbered list of sessions (most recently accessed first) and read a
@@ -414,45 +454,9 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 }
 
 fn cmd_init() -> Result<()> {
-    let claude_dir = inject::claude_dir()?;
-    std::fs::create_dir_all(&claude_dir)?;
-    let settings_path = claude_dir.join("settings.json");
-
-    // 1. Install the SessionStart hook (idempotent).
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let data = std::fs::read_to_string(&settings_path)
-            .with_context(|| format!("reading {}", settings_path.display()))?;
-        if data.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&data)
-                .with_context(|| format!("parsing {}", settings_path.display()))?
-        }
-    } else {
-        serde_json::json!({})
-    };
-    if ensure_sessionstart_hook(&mut root) {
-        std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-        ui::step(
-            "wrote",
-            &format!("SessionStart hook to {}", ui::abbrev_path(&settings_path)),
-        );
-    } else {
-        eprintln!(
-            "{} {}",
-            ui::epaint(ui::DIM, "SessionStart hook already present at"),
-            ui::epaint(ui::DIM, &ui::abbrev_path(&settings_path)),
-        );
-    }
-
-    // 2. Inject the csm working-mode prompt into the global CLAUDE.md.
-    let claude_md = inject::claude_md_path()?;
-    inject::inject_file(&claude_md)?;
-    ui::step(
-        "injected",
-        &format!("prompt into {}", ui::abbrev_path(&claude_md)),
-    );
-
+    // Install every known agent's global state-injection wiring (Claude's
+    // SessionStart hook + CLAUDE.md, pi's CLAUDE.md). Idempotent.
+    agent::install_all()?;
     match which_csm() {
         Some(p) => ui::step(
             "found",
@@ -464,51 +468,6 @@ fn cmd_init() -> Result<()> {
         ),
     }
     Ok(())
-}
-
-/// Add a SessionStart hook (`csm hook`) to the settings if not already present.
-/// Returns true if the settings were modified.
-fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
-    const CMD: &str = "csm hook";
-
-    let already = root
-        .get("hooks")
-        .and_then(|h| h.get("SessionStart"))
-        .and_then(|s| s.as_array())
-        .map(|groups| {
-            groups.iter().any(|g| {
-                g.get("matcher").and_then(|m| m.as_str()) == Some("")
-                    && g
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .map(|hs| {
-                            hs.iter().any(|h| {
-                                h.get("type").and_then(|t| t.as_str()) == Some("command")
-                                    && h.get("command").and_then(|c| c.as_str()) == Some(CMD)
-                            })
-                        })
-                        .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-    if already {
-        return false;
-    }
-
-    if root.get("hooks").is_none() {
-        root["hooks"] = serde_json::json!({});
-    }
-    if !root["hooks"]["SessionStart"].is_array() {
-        root["hooks"]["SessionStart"] = serde_json::json!([]);
-    }
-    let arr = root["hooks"]["SessionStart"]
-        .as_array_mut()
-        .expect("SessionStart is an array");
-    arr.push(serde_json::json!({
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": CMD }]
-    }));
-    true
 }
 
 fn which_csm() -> Option<PathBuf> {
