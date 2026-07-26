@@ -18,17 +18,33 @@ pub fn claude_md_path() -> Result<PathBuf> {
     Ok(claude_dir()?.join("CLAUDE.md"))
 }
 
-/// Path to the pi global agent dir (`~/.pi/agent`). pi auto-discovers
-/// `CLAUDE.md`/`AGENTS.md` here as a context file - the direct analog of
-/// Claude's `~/.claude/CLAUDE.md`.
+/// Path to the pi global agent dir (`~/.pi/agent`) - the direct analog of
+/// Claude's `~/.claude/CLAUDE.md`. See [`pi_context_target`] for the
+/// precedence we mirror when picking which file to write.
 pub fn pi_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".pi").join("agent"))
 }
 
-/// Path to the pi global CLAUDE.md (`~/.pi/agent/CLAUDE.md`).
-pub fn pi_claude_md_path() -> Result<PathBuf> {
-    Ok(pi_dir()?.join("CLAUDE.md"))
+/// pi's context-file precedence, mirroring
+/// `@earendil-works/pi-coding-agent`'s `dist/core/resource-loader.js`. pi reads
+/// the first match and ignores the rest, so csm must write into whichever file
+/// pi will actually load.
+const PI_CONTEXT_CANDIDATES: [&str; 4] = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+
+/// Pick the file pi will actually load from `~/.pi/agent/`. First-match-wins
+/// over [`PI_CONTEXT_CANDIDATES`]; if none exists yet, default to `CLAUDE.md`
+/// (fresh-install behavior) - otherwise writing into `CLAUDE.md` when
+/// `AGENTS.md` exists would be silently ignored.
+pub fn pi_context_target() -> Result<PathBuf> {
+    let dir = pi_dir()?;
+    for name in PI_CONTEXT_CANDIDATES {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Ok(dir.join("CLAUDE.md"))
 }
 
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
@@ -122,12 +138,13 @@ pub fn install_claude() -> Result<()> {
     Ok(())
 }
 
-/// Install pi's state-injection wiring: the csm working-mode block in
-/// `~/.pi/agent/CLAUDE.md`. pi discovers this file at launch (no hook needed),
-/// so the per-session state snapshot is all that's passed at launch time.
-/// Idempotent. This is `PiAgent::install`.
+/// Install pi's state-injection wiring: the csm working-mode block in pi's
+/// global context file (`~/.pi/agent/AGENTS.md` or `CLAUDE.md` - whichever pi
+/// loads first; see [`pi_context_target`]). pi discovers this file at launch
+/// (no hook needed), so the per-session state snapshot is all that's passed at
+/// launch time. Idempotent. This is `PiAgent::install`.
 pub fn install_pi() -> Result<()> {
-    let pi_md = pi_claude_md_path()?;
+    let pi_md = pi_context_target()?;
     let (_, modified) = inject_file(&pi_md)?;
     if modified {
         ui::step(
