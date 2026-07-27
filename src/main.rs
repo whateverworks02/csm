@@ -54,6 +54,7 @@ enum Cmd {
     Unpin { name: String },
 
     /// Hard-delete a session (workspace dir + index entry).
+    #[command(aliases = ["remove", "delete", "del"])]
     Rm {
         name: String,
         /// Allow deleting a pinned session.
@@ -89,6 +90,7 @@ enum Cmd {
     Init,
 
     /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
+    #[command(hide = true)]
     Hook,
 
     /// `csm <name>`: start (or resume) a session by name and launch Claude Code.
