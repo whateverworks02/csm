@@ -19,6 +19,7 @@ mod gc;
 mod hook;
 mod inject;
 mod prompt;
+mod render;
 mod store;
 mod ui;
 mod workspace;
@@ -387,6 +388,22 @@ fn cmd_rename(old: &str, new: &str) -> Result<()> {
     Ok(())
 }
 
+/// Width of the dim label column in the `csm show` card.
+const CARD_LABEL_WIDTH: usize = 11;
+
+/// One `csm show` card row: `  <dim label padded to CARD_LABEL_WIDTH> <value>`.
+/// `value` is already styled by the caller.
+fn card_row(label: &str, value: &str) {
+    println!(
+        "  {} {}",
+        ui::paint(
+            ui::DIM,
+            &format!("{:<width$}", label, width = CARD_LABEL_WIDTH),
+        ),
+        value,
+    );
+}
+
 fn cmd_show(name: Option<String>) -> Result<()> {
     let name = match name {
         Some(n) => n,
@@ -405,27 +422,18 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         .sessions
         .get(&name)
         .with_context(|| format!("no csm session named {:?}", name))?;
-    let dir = store::session_dir(&name)?;
+
+    // Card: name, then one row per field. Labels dim + fixed-width so values
+    // align; metadata recedes (dim), task/last carry the recognition signal
+    // (normal weight). No icons, no raw markdown - a glance should suffice.
     println!("{}", ui::paint(ui::CYAN_BOLD, &name));
-    println!(
-        "  {} {}",
-        ui::paint(ui::DIM, &format!("{:<11}", "workspace")),
-        ui::paint(ui::DIM, &ui::abbrev_path(&dir)),
+    card_row(
+        "origin",
+        &ui::paint(ui::DIM, &ui::abbrev_home(&meta.origin_pwd)),
     );
-    println!(
-        "  {} {}",
-        ui::paint(ui::DIM, &format!("{:<11}", "origin")),
-        ui::paint(ui::DIM, &ui::abbrev_home(&meta.origin_pwd)),
-    );
-    println!(
-        "  {} {}",
-        ui::paint(ui::DIM, &format!("{:<11}", "created")),
-        ui::paint(ui::DIM, &store::format_ts(&meta.created_at)),
-    );
-    println!(
-        "  {} {}",
-        ui::paint(ui::DIM, &format!("{:<11}", "last access")),
-        ui::paint(ui::DIM, &store::format_ts(&meta.last_access)),
+    card_row(
+        "last access",
+        &ui::paint(ui::DIM, &store::format_ts(&meta.last_access)),
     );
     let pinned_str = if meta.pinned { "yes" } else { "no" };
     let pinned_styled = if meta.pinned {
@@ -433,26 +441,50 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     } else {
         ui::paint(ui::DIM, pinned_str)
     };
-    println!(
-        "  {} {}",
-        ui::paint(ui::DIM, &format!("{:<11}", "pinned")),
-        pinned_styled,
-    );
-    println!();
-    let state =
-        workspace::read_state_md(&name).unwrap_or_else(|| "(state.md not found)".to_string());
-    println!("{}", ui::paint(ui::DIM, "--- state.md ---"));
-    println!("{}", state);
-    let scripts = workspace::list_scripts(&name);
-    println!();
-    println!("{}", ui::paint(ui::DIM, "--- scripts/ ---"));
-    if scripts.is_empty() {
-        println!("  {}", ui::paint(ui::DIM, "(none)"));
+    card_row("pinned", &pinned_styled);
+
+    // task - first paragraph of the Task section; the recognizer. First line
+    // carries the label, continuation lines indent under the value column.
+    let task_lines = workspace::read_task_lines(&name, 5);
+    let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
+    if task_lines.is_empty() {
+        card_row("task", &ui::paint(ui::DIM, "(none)"));
     } else {
-        for s in scripts {
-            println!("  {}", s);
+        for (i, line) in task_lines.iter().enumerate() {
+            let val = render::truncate(line, 100);
+            if i == 0 {
+                card_row("task", &val);
+            } else {
+                println!("{}{}", cont, val);
+            }
         }
     }
+
+    // last - most recent progress entry: timestamp + summary.
+    let last = match workspace::read_last_activity(&name) {
+        Some(act) if !act.summary.is_empty() => {
+            let head = if act.ts.is_empty() {
+                act.summary
+            } else {
+                format!(
+                    "{}  {}",
+                    ui::paint(ui::DIM, &store::format_ts(&act.ts)),
+                    act.summary
+                )
+            };
+            render::truncate(&head, 100)
+        }
+        _ => ui::paint(ui::DIM, "(none)").to_string(),
+    };
+    card_row("last", &last);
+
+    let scripts = workspace::list_scripts(&name);
+    let scripts_val = if scripts.is_empty() {
+        ui::paint(ui::DIM, "(none)").to_string()
+    } else {
+        format!("{} ({})", scripts.join(", "), scripts.len())
+    };
+    card_row("scripts", &scripts_val);
     Ok(())
 }
 
