@@ -87,6 +87,17 @@ pub fn save_index(idx: &Index) -> Result<()> {
     Ok(())
 }
 
+/// Look up a session's metadata, erroring if it doesn't exist. The shared
+/// validation for read-only commands (`show`, `detail`, `rm`); centralizes the
+/// `no csm session named` message so callers don't re-string it.
+pub fn require_session(name: &str) -> Result<SessionMeta> {
+    let idx = load_index()?;
+    idx.sessions
+        .get(name)
+        .cloned()
+        .with_context(|| format!("no csm session named {:?}", name))
+}
+
 /// Create the session if missing, refresh `last_access`, persist, return meta.
 /// `origin_pwd` is only used at creation; it is never overwritten.
 pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {

@@ -105,7 +105,8 @@ per-terminal binding, used only for this in-process revival.)
 | `csm <name> [--agent <x>]` | Start/resume session `<name>` and launch agent `<x>` (default `claude`; also `pi`). |
 | `csm list` | List sessions (sorted by last access; `*` = pinned). |
 | `csm pin <name>` / `csm unpin <name>` | Pin / unpin (pinned sessions are never GC'd). |
-| `csm show [name]` | Print a session's workspace path, metadata, and `state.md`. Defaults to `$CSM_SESSION`, else opens a picker. |
+| `csm show [name]` | Print a compact recognition card (name, metadata, task gist, last activity). Defaults to `$CSM_SESSION`, else opens a picker. |
+| `csm detail [name]` | Render a session's full `state.md`, read-only (the deep read). Same name resolution as `csm show`. |
 | `csm rm <name>` | Hard-delete a session (workspace dir + index entry). `--force` required for pinned; `--yes` skips confirm. |
 | `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
@@ -119,7 +120,7 @@ per-terminal binding, used only for this in-process revival.)
 
 csm follows the cargo/bun convention: **status and progress go to stderr** (so
 they never pollute piped stdout), while **data goes to stdout** (`csm list`,
-`csm show`). Output is colorized when writing to a terminal and automatically
+`csm show`, `csm detail`). Output is colorized when writing to a terminal and automatically
 stripped when piped, honoring `NO_COLOR` (disable) and `CLICOLOR_FORCE` (force
 on). The style is cargo-like restraint - color, not icons: paths are
 abbreviated with `~`, `*` marks pinned sessions, and errors use cargo's red
