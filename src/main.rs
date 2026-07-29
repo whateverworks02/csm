@@ -95,6 +95,10 @@ enum Cmd {
     /// ~/.pi/agent/CLAUDE.md.
     Init,
 
+    /// Print the version.
+    #[command(hide = true)]
+    Version,
+
     /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
     #[command(hide = true)]
     Hook,
@@ -135,6 +139,10 @@ fn try_main() -> Result<()> {
         Some(Cmd::Detail { name }) => cmd_detail(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
         Some(Cmd::Init) => cmd_init(),
+        Some(Cmd::Version) => {
+            println!("csm {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some(Cmd::Hook) => hook::run_hook(),
         None => cmd_pick_here(),
     }

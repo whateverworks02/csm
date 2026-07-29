@@ -120,11 +120,8 @@ fn print_list(rows: &[(String, SessionMeta)]) {
 }
 
 pub fn confirm(msg: &str) -> Result<bool> {
-    eprint!(
-        "{} {} ",
-        ui::epaint(ui::BOLD, msg),
-        ui::epaint(ui::DIM, "[y/N]"),
-    );
+    eprintln!("{}", ui::epaint(ui::BOLD, msg));
+    eprint!("  {} ", ui::epaint(ui::DIM, "[y/N]"));
     std::io::stderr().flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
