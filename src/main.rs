@@ -174,7 +174,7 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
         "{}",
         ui::epaint(ui::DIM, &format!("launching {}...", agent_adapter.id())),
     );
-    let status = agent_adapter.launch(name, &meta).status().context(format!(
+    let status = agent_adapter.launch(name).status().context(format!(
         "failed to launch {} (is it installed and on PATH?)",
         agent_adapter.id()
     ))?;

@@ -27,7 +27,7 @@ pub trait Agent {
     fn id(&self) -> &'static str;
 
     /// Build the launch command for session `name`. Owns its args/env.
-    fn launch(&self, name: &str, meta: &crate::store::SessionMeta) -> Command;
+    fn launch(&self, name: &str) -> Command;
 
     /// Idempotent: wire state-injection into the agent's global config.
     /// Default no-op; Claude installs a SessionStart hook + CLAUDE.md, pi
@@ -65,7 +65,7 @@ impl Agent for ClaudeAgent {
         "claude"
     }
 
-    fn launch(&self, name: &str, _meta: &crate::store::SessionMeta) -> Command {
+    fn launch(&self, name: &str) -> Command {
         // `$CSM_SESSION` is the per-terminal binding the SessionStart hook reads
         // (hook.rs). On `/clear` it is still set (same process), so the hook
         // revives the workspace memory in place. The state snapshot itself is
@@ -89,12 +89,12 @@ impl Agent for PiAgent {
         "pi"
     }
 
-    fn launch(&self, name: &str, meta: &crate::store::SessionMeta) -> Command {
+    fn launch(&self, name: &str) -> Command {
         // pi auto-discovers `~/.pi/agent/CLAUDE.md` (installed by `install()`)
         // for the working-mode prompt, so only the per-session state snapshot is
         // injected here, at launch, via `--append-system-prompt`. Sessions are
         // co-located under the workspace to feed the later capture step.
-        let ctx = hook::context_for_session(name, meta);
+        let ctx = hook::build_context(name);
         let session_dir = pi_session_dir(name);
         let mut cmd = Command::new("pi");
         cmd.env("CSM_SESSION", name)

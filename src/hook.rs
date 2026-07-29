@@ -1,6 +1,6 @@
 //! Claude Code SessionStart hook handler.
 //!
-//! stdin  : { session_id, transcript_path, cwd, hook_event_name, source: "startup"|"resume"|"clear"|"compact" }
+//! stdin  : Claude pipes a SessionStart event JSON; we don't parse it.
 //! stdout : { "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "..." } }
 //!
 //! When no active csm session is bound ($CSM_SESSION unset or unknown), we
@@ -10,20 +10,10 @@
 use crate::store;
 use crate::workspace;
 use anyhow::Result;
-use serde_json::Value;
-use std::io::Read;
 
 const STATE_CAP: usize = 6000;
 
 pub fn run_hook() -> Result<()> {
-    // Best-effort stdin parse. Never fail the session on bad input.
-    let mut input = String::new();
-    let _ = std::io::stdin().read_to_string(&mut input);
-    let source = serde_json::from_str::<Value>(&input)
-        .ok()
-        .and_then(|v| v.get("source").and_then(|s| s.as_str()).map(String::from))
-        .unwrap_or_default();
-
     let name = match std::env::var("CSM_SESSION") {
         Ok(n) if !n.is_empty() => n,
         _ => return Ok(()), // no active session - inject nothing
@@ -37,7 +27,7 @@ pub fn run_hook() -> Result<()> {
     };
     workspace::ensure_workspace(&name, &meta)?;
 
-    let ctx = build_context(&name, &meta.origin_pwd, &source, meta.pinned);
+    let ctx = build_context(&name);
     let out = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
@@ -49,51 +39,28 @@ pub fn run_hook() -> Result<()> {
 }
 
 /// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
-/// (capped), a `progress.md` tail, the scripts list, and the notes list.
-pub(crate) fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: bool) -> String {
+/// (capped), and a `progress.md` tail - the lean orientation memory. The agent
+/// discovers scripts/notes via the filesystem (`csm show` lists them; the
+/// working-mode prompt points at the INDEXes), so they aren't injected here.
+/// Used by both the SessionStart hook (`run_hook`) and the pi launch adapter.
+pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let state = read_state_capped(name);
     let progress = workspace::read_progress_tail(name, 40)
         .unwrap_or_else(|| "(progress.md not found)".to_string());
-    let scripts = workspace::list_scripts(name);
-    let notes = workspace::list_notes(name);
-    let src = if source.is_empty() { "startup" } else { source };
 
     format!(
-        "[csm] Active workspace memory session: \"{name}\" (started from `{origin_pwd}`, source={src}, pinned={pinned}).
+        "[csm] Active workspace memory session: \"{name}\".
 Workspace directory: {dir}
 
 --- state.md ---
 {state}
 
 --- progress.md (recent) ---
-{progress}
-
---- scripts/ (see scripts/INDEX.md) ---
-{scripts}
-
---- notes/ (see notes/INDEX.md) ---
-{notes}",
-        scripts = join_or_none(&scripts),
-        notes = join_or_none(&notes),
+{progress}"
     )
-}
-
-fn join_or_none(items: &[String]) -> String {
-    if items.is_empty() {
-        "(none yet)".to_string()
-    } else {
-        items.join(", ")
-    }
-}
-
-/// Build the snapshot for a session looked up by name (source defaults to
-/// "startup"). Used by agents that inject at launch (pi) and anywhere the
-/// hook's event `source` isn't available.
-pub(crate) fn context_for_session(name: &str, meta: &store::SessionMeta) -> String {
-    build_context(name, &meta.origin_pwd, "startup", meta.pinned)
 }
 
 fn read_state_capped(name: &str) -> String {
