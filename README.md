@@ -15,6 +15,9 @@ in each agent's own global instructions file (`~/.claude/CLAUDE.md`,
   sessions/<name>/
     state.md              # source of truth: Task, AC, SOP, Progress, Key links, Open questions
     progress.md           # append-only, timestamped log
+    notes/
+      INDEX.md            # registry of focused deep-dive articles (discovery)
+      *.md                # flow analyses, diagrams, design/decision notes
     scripts/
       INDEX.md            # registry of shared scripts (tool discovery)
       *.py                # shared data-washing / utility scripts
@@ -31,11 +34,11 @@ in each agent's own global instructions file (`~/.claude/CLAUDE.md`,
    auto-injects the active session's `state.md`.
 
 The "magic" is the prompt: it specifies a disciplined working mode - orient on
-`state.md`, append to `progress.md`, maintain `scripts/INDEX.md`, prepare
-handoffs. The prompt is framed to stay dormant unless a csm session is active,
-so it's safe in the global CLAUDE.md. **Writing `state.md` / `progress.md` is
-entirely the agent's job**; csm only provides the directory, the prompt, and the
-hook.
+`state.md`, append to `progress.md`, write `notes/` for deep dives, maintain
+`scripts/INDEX.md` and `notes/INDEX.md`, prepare handoffs. The prompt is framed
+to stay dormant unless a csm session is active, so it's safe in the global
+CLAUDE.md. **Writing `state.md` / `progress.md` is entirely the agent's job**;
+csm only provides the directory, the prompt, and the hook.
 
 Why the prompt lives in `CLAUDE.md` (not in the hook's injected context): Claude
 Code treats hook-injected `additionalContext` as factual context; imperative
@@ -74,8 +77,8 @@ alias csp='csm --agent pi'        # then: csp my-task
 What happens on `csm <name> [--agent <x>]`:
 - creates the session in `index.json` (recording `origin_pwd`) if new,
   refreshes `last_access` otherwise;
-- scaffolds the workspace (`state.md`, `progress.md`, `scripts/INDEX.md`) if
-  missing;
+- scaffolds the workspace (`state.md`, `progress.md`, `scripts/INDEX.md`,
+  `notes/INDEX.md`) if missing;
 - launches the agent via its agent adapter. Claude Code runs `claude` with
   `CSM_SESSION=<name>` (its SessionStart hook injects `state.md` on start /
   `/clear`); `pi` runs `pi` with `--append-system-prompt <state>` and
@@ -84,8 +87,8 @@ What happens on `csm <name> [--agent <x>]`:
 It does **not** modify any file in your repo (the working-mode prompt is global,
 in `~/.claude/CLAUDE.md`). Claude Code's `SessionStart` hook then fires, reads
 `CSM_SESSION`, and injects the session's `state.md` (+ a `progress.md` tail +
-scripts list) into context. The agent reads the working mode from `CLAUDE.md`
-and the current state from the hook injection.
+scripts list + notes list) into context. The agent reads the working mode from
+`CLAUDE.md` and the current state from the hook injection.
 
 ## `/clear` revival
 
@@ -144,8 +147,8 @@ Machine-readable output is never styled: `csm hook` emits pure JSON on stdout.
   that `csm <name>` launched);
 - if set and known: self-heals the workspace, refreshes `last_access`, and
   prints `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`
-  containing the workspace path, `state.md`, a `progress.md` tail, and the
-  scripts list;
+  containing the workspace path, `state.md`, a `progress.md` tail, the scripts
+  list, and the notes list;
 - otherwise: exits 0 with no output (injects nothing).
 
 stdout contains **only** the JSON object; all diagnostics go to stderr.
