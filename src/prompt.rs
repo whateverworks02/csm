@@ -19,14 +19,15 @@ A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `progr
 
 - `state.md` - source of truth. Sections: Task, Acceptance criteria, SOP, Progress, Key links, Open questions.
 - `progress.md` - append-only timestamped log.
+- `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
 ### Working mode
 
-1. **Orient first.** Read `state.md` fully; skim the `progress.md` tail.
-2. **Keep `state.md` tight and authoritative.** Move settled detail to `progress.md`.
+1. **Orient first.** Read `state.md` fully; skim the `progress.md` tail and `notes/INDEX.md`.
+2. **Keep `state.md` tight and authoritative.** Move settled detail to `progress.md`; move deep dives to `notes/`.
 3. **Append `progress.md` after each meaningful change** (subtask done, decision, blocker, handoff). Entry: `## YYYY-MM-DD HH:MM - <agent> - <summary>` plus 1-3 bullets. Append only. Never rewrite history.
-4. **Maintain `scripts/INDEX.md`.** Add an entry per new script (name, purpose, args, example); update on rename/remove. Read the index before writing a new script.
+4. **Maintain `scripts/INDEX.md` and `notes/INDEX.md`.** Add an entry per new script/note; update on rename/remove. Read the index before writing a new one.
 5. **Before you stop: update `state.md`** (Progress + Open questions current) **and append a `progress.md` handoff line** stating where to resume. Mandatory - the next agent's orientation depends on it.
 6. **Cross-repo:** the same session name in each repo shares one `state.md`. Reference the name in commits/PRs.
 "#;

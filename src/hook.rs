@@ -49,7 +49,7 @@ pub fn run_hook() -> Result<()> {
 }
 
 /// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
-/// (capped), a `progress.md` tail, and the scripts list.
+/// (capped), a `progress.md` tail, the scripts list, and the notes list.
 pub(crate) fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: bool) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
@@ -58,11 +58,7 @@ pub(crate) fn build_context(name: &str, origin_pwd: &str, source: &str, pinned: 
     let progress = workspace::read_progress_tail(name, 40)
         .unwrap_or_else(|| "(progress.md not found)".to_string());
     let scripts = workspace::list_scripts(name);
-    let scripts_line = if scripts.is_empty() {
-        "(none yet)".to_string()
-    } else {
-        scripts.join(", ")
-    };
+    let notes = workspace::list_notes(name);
     let src = if source.is_empty() { "startup" } else { source };
 
     format!(
@@ -76,8 +72,21 @@ Workspace directory: {dir}
 {progress}
 
 --- scripts/ (see scripts/INDEX.md) ---
-{scripts_line}"
+{scripts}
+
+--- notes/ (see notes/INDEX.md) ---
+{notes}",
+        scripts = join_or_none(&scripts),
+        notes = join_or_none(&notes),
     )
+}
+
+fn join_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "(none yet)".to_string()
+    } else {
+        items.join(", ")
+    }
 }
 
 /// Build the snapshot for a session looked up by name (source defaults to

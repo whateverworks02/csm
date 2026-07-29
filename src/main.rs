@@ -494,13 +494,22 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     card_row("last", &last);
 
     let scripts = workspace::list_scripts(&name);
-    let scripts_val = if scripts.is_empty() {
+    card_list_row("scripts", &scripts);
+
+    let notes = workspace::list_notes(&name);
+    card_list_row("notes", &notes);
+    Ok(())
+}
+
+/// Render a card row for a subdirectory listing: comma-joined names with a
+/// count, or dim "(none)" when empty.
+fn card_list_row(label: &str, items: &[String]) {
+    let val = if items.is_empty() {
         ui::paint(ui::DIM, "(none)").to_string()
     } else {
-        format!("{} ({})", scripts.join(", "), scripts.len())
+        format!("{} ({})", items.join(", "), items.len())
     };
-    card_row("scripts", &scripts_val);
-    Ok(())
+    card_row(label, &val);
 }
 
 /// `csm detail [name]`: render a session's full `state.md` read-only - the deep

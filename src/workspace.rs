@@ -8,8 +8,6 @@ use std::fs;
 /// existing files are never overwritten.
 pub fn ensure_workspace(name: &str, meta: &SessionMeta) -> Result<()> {
     let dir = session_dir(name)?;
-    let scripts = dir.join("scripts");
-    fs::create_dir_all(&scripts)?;
 
     let state_md = dir.join("state.md");
     if !state_md.exists() {
@@ -21,11 +19,28 @@ pub fn ensure_workspace(name: &str, meta: &SessionMeta) -> Result<()> {
         fs::write(&progress_md, progress_md_template(name, &meta.origin_pwd))?;
     }
 
-    let index_md = scripts.join("INDEX.md");
-    if !index_md.exists() {
-        fs::write(&index_md, scripts_index_template(name))?;
-    }
+    ensure_subdir(
+        &dir,
+        "scripts",
+        &index_template(name, "scripts", "shared scripts"),
+    )?;
+    ensure_subdir(
+        &dir,
+        "notes",
+        &index_template(name, "notes", "focused deep-dive articles"),
+    )?;
 
+    Ok(())
+}
+
+/// Create a subdirectory and write its INDEX.md scaffold if missing.
+fn ensure_subdir(dir: &std::path::Path, subdir: &str, content: &str) -> Result<()> {
+    let path = dir.join(subdir);
+    fs::create_dir_all(&path)?;
+    let index = path.join("INDEX.md");
+    if !index.exists() {
+        fs::write(&index, content)?;
+    }
     Ok(())
 }
 
@@ -113,11 +128,11 @@ fn parse_progress_header(header: &str) -> (String, String) {
     }
 }
 
-/// List script filenames under scripts/ (excluding INDEX.md), sorted.
-pub fn list_scripts(name: &str) -> Vec<String> {
+/// List filenames under `<session-dir>/<subdir>/` (excluding INDEX.md), sorted.
+fn list_files_in(name: &str, subdir: &str) -> Vec<String> {
     let mut out = Vec::new();
     let dir = match session_dir(name) {
-        Ok(d) => d.join("scripts"),
+        Ok(d) => d.join(subdir),
         Err(_) => return out,
     };
     if let Ok(entries) = fs::read_dir(&dir) {
@@ -131,6 +146,18 @@ pub fn list_scripts(name: &str) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// List script filenames under scripts/ (excluding INDEX.md), sorted.
+pub fn list_scripts(name: &str) -> Vec<String> {
+    list_files_in(name, "scripts")
+}
+
+/// List note filenames under notes/ (excluding INDEX.md), sorted. Filesystem-
+/// based, so awareness (show card / hook snapshot) does not depend on INDEX.md
+/// being kept current - an unregistered note file is still counted.
+pub fn list_notes(name: &str) -> Vec<String> {
+    list_files_in(name, "notes")
 }
 
 fn state_md_template(name: &str) -> String {
@@ -174,14 +201,14 @@ fn progress_md_template(name: &str, origin_pwd: &str) -> String {
     )
 }
 
-fn scripts_index_template(name: &str) -> String {
+fn index_template(name: &str, subdir: &str, description: &str) -> String {
     format!(
-        r#"# {name} - scripts registry
+        r#"# {name} - {subdir} registry
 
-> Registry of shared scripts under scripts/. Read this before writing a new script.
-> Entry format: `### <name>` then purpose / args / example.
+> Registry of {description} under {subdir}/. Read this before writing a new one.
+> Entry format: `### <slug>` then a one-line gist.
 
-<!-- Add entries as you add scripts. -->
+<!-- Add entries as you add {subdir}. -->
 "#
     )
 }
