@@ -68,8 +68,14 @@ enum Cmd {
     /// Rename a session and re-point its origin_pwd to the current directory.
     Rename { old: String, new: String },
 
-    /// Show a session's workspace path and state.md.
+    /// Show a session as a compact recognition card.
     Show {
+        /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
+        name: Option<String>,
+    },
+
+    /// Render a session's full state.md, read-only (the deep read).
+    Detail {
         /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
         name: Option<String>,
     },
@@ -126,6 +132,7 @@ fn try_main() -> Result<()> {
         Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
         Some(Cmd::Rename { old, new }) => cmd_rename(&old, &new),
         Some(Cmd::Show { name }) => cmd_show(name),
+        Some(Cmd::Detail { name }) => cmd_detail(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
         Some(Cmd::Init) => cmd_init(),
         Some(Cmd::Hook) => hook::run_hook(),
@@ -295,6 +302,21 @@ fn pick_session_all() -> Result<Option<String>> {
     pick_session("all sessions", rows)
 }
 
+/// Resolve a session name from an optional arg: an explicit name wins;
+/// otherwise `$CSM_SESSION`; otherwise the interactive picker. Returns
+/// `Ok(None)` only when the picker was offered and the user aborted (the
+/// caller should then return cleanly). Does not validate the name exists -
+/// callers validate when they look up session data.
+fn resolve_session_name(name: Option<String>) -> Result<Option<String>> {
+    match name {
+        Some(n) => Ok(Some(n)),
+        None => match std::env::var("CSM_SESSION") {
+            Ok(n) if !n.is_empty() => Ok(Some(n)),
+            _ => Ok(pick_session_all()?),
+        },
+    }
+}
+
 fn cmd_list() -> Result<()> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
@@ -325,11 +347,7 @@ fn cmd_list() -> Result<()> {
 }
 
 fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
-    let idx = store::load_index()?;
-    let meta = idx
-        .sessions
-        .get(name)
-        .with_context(|| format!("no csm session named {:?}", name))?;
+    let meta = store::require_session(name)?;
     if meta.pinned && !force {
         anyhow::bail!(
             "session `{}` is pinned; pass --force to delete anyway",
@@ -407,23 +425,10 @@ fn card_row(label: &str, value: &str) {
 }
 
 fn cmd_show(name: Option<String>) -> Result<()> {
-    let name = match name {
-        Some(n) => n,
-        None => match std::env::var("CSM_SESSION") {
-            Ok(n) if !n.is_empty() => n,
-            _ => {
-                let Some(n) = pick_session_all()? else {
-                    return Ok(());
-                };
-                n
-            }
-        },
+    let Some(name) = resolve_session_name(name)? else {
+        return Ok(());
     };
-    let idx = store::load_index()?;
-    let meta = idx
-        .sessions
-        .get(&name)
-        .with_context(|| format!("no csm session named {:?}", name))?;
+    let meta = store::require_session(&name)?;
 
     // Card: name, then one row per field. Labels dim + fixed-width so values
     // align; metadata recedes (dim), task/last carry the recognition signal
@@ -487,6 +492,49 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         format!("{} ({})", scripts.join(", "), scripts.len())
     };
     card_row("scripts", &scripts_val);
+    Ok(())
+}
+
+/// `csm detail [name]`: render a session's full `state.md` read-only - the deep
+/// read to complement `csm show`'s recognition card. Name resolution mirrors
+/// `csm show` (explicit arg > `$CSM_SESSION` > picker), shared via
+/// `resolve_session_name`. Each `## Section` becomes a bold header + an
+/// inline-stripped body (cargo aesthetic: color, not icons; no raw markdown).
+fn cmd_detail(name: Option<String>) -> Result<()> {
+    let Some(name) = resolve_session_name(name)? else {
+        return Ok(());
+    };
+    let meta = store::require_session(&name)?;
+
+    // Header: name + last-access for context. (origin/pinned live in `show`.)
+    println!(
+        "{}  {}",
+        ui::paint(ui::CYAN_BOLD, &name),
+        ui::paint(ui::DIM, &store::format_ts(&meta.last_access)),
+    );
+
+    let content = match workspace::read_state_md(&name) {
+        Some(c) => c,
+        None => {
+            eprintln!(
+                "{}",
+                ui::epaint(ui::DIM, &format!("no state.md for session `{name}`")),
+            );
+            return Ok(());
+        }
+    };
+
+    for section in render::sections(&content) {
+        println!("{}", ui::paint(ui::BOLD, &section.title));
+        if section.body.is_empty() {
+            println!("  {}", ui::paint(ui::DIM, "(none)"));
+        } else {
+            for line in &section.body {
+                println!("{line}");
+            }
+        }
+        println!();
+    }
     Ok(())
 }
 

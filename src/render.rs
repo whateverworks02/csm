@@ -1,11 +1,12 @@
-//! Inline markdown -> plain-text stripper for `csm show` card gists.
+//! Plain-text markdown rendering for `csm show` (card gists) and `csm detail`
+//! (full rendered state.md).
 //!
-//! `csm show` is a recognition aid (which session is this?), not a document
-//! viewer - it shows one-line gists, not rendered sections. So this module
-//! only strips inline markers (`**bold**`, `*italic*`, `` `code` ``,
-//! `[[wikilink]]`, `[text](url)`, `<!-- comments -->`) so a gist reads as text
-//! instead of raw markdown source. No styling, no block-level parsing - for
-//! the full file, `cat state.md`. Styling lives in `ui`; this is plain text.
+//! `csm show` is a recognition aid (which session is this?) - it shows
+//! one-line gists, so it only needs `strip_inline` + `truncate`. `csm detail`
+//! is the deep read, so `sections` splits a state.md into `## Section`s and
+//! inline-strips each body line. No styling here (that lives in `ui`), no
+//! Unicode glyphs - plain text that `cmd_show`/`cmd_detail` wrap in cargo-style
+//! color.
 
 /// Strip inline markdown markers from `text`, returning plain text. Unmatched
 /// markers (e.g. a lone `*`) are left literal.
@@ -97,4 +98,65 @@ pub fn truncate(s: &str, max: usize) -> String {
     let mut t: String = chars[..cut_chars].iter().collect();
     t.push('…');
     t
+}
+
+/// A `## Section` of a state.md: its title (text after `## `) and the body
+/// lines under it, each with inline markdown stripped. `csm detail` renders one
+/// per section. The H1 title and `>` quote boilerplate before the first section
+/// are dropped; genuine blank lines are kept as paragraph breaks.
+pub struct Section {
+    pub title: String,
+    pub body: Vec<String>,
+}
+
+/// Split a markdown document into `## `-headed sections. Each section's body is
+/// inline-stripped (so `**x**` reads as `x`) with leading/trailing blank lines
+/// trimmed; markup-only lines (e.g. HTML comments) are dropped. Sub-structure
+/// (list markers, checkboxes, `###` sub-headings) is preserved as text. Returns
+/// sections in document order; an empty vec means no `## ` headings at all.
+pub fn sections(content: &str) -> Vec<Section> {
+    let mut out = Vec::new();
+    let mut cur: Option<Section> = None;
+    for line in content.lines() {
+        if let Some(title) = line.strip_prefix("## ") {
+            if let Some(s) = cur.take() {
+                out.push(trim_section(s));
+            }
+            cur = Some(Section {
+                title: title.trim().to_string(),
+                body: Vec::new(),
+            });
+            continue;
+        }
+        // Before the first section: drop the H1 and `>` boilerplate. Inside a
+        // section: keep genuine blank lines as paragraph breaks, drop
+        // markup-only lines, inline-strip the rest.
+        let Some(s) = cur.as_mut() else {
+            continue;
+        };
+        if line.trim().is_empty() {
+            s.body.push(String::new());
+        } else {
+            let stripped = strip_inline(line);
+            if !stripped.is_empty() {
+                s.body.push(stripped);
+            }
+        }
+    }
+    if let Some(s) = cur.take() {
+        out.push(trim_section(s));
+    }
+    out
+}
+
+/// Trim leading/trailing blank lines from a section's body so a section whose
+/// only "content" was a comment or whitespace renders as `(none)`.
+fn trim_section(mut s: Section) -> Section {
+    while s.body.first().is_some_and(|l| l.is_empty()) {
+        s.body.remove(0);
+    }
+    while s.body.last().is_some_and(|l| l.is_empty()) {
+        s.body.pop();
+    }
+    s
 }

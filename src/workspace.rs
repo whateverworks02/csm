@@ -51,45 +51,28 @@ pub fn read_progress_tail(name: &str, max_lines: usize) -> Option<String> {
 /// up to the first blank line), each with inline markdown stripped - enough
 /// substance to recall what the session is about, not just the heading line.
 /// Capped at `max_lines`. Empty vec if no Task section.
+///
+/// Layers on `render::sections` (the single `## Section` scanner shared with
+/// `csm detail`) instead of re-scanning: find the Task section, take its first
+/// paragraph, cap it. Each line is trimmed to match the prior
+/// `strip_inline(line.trim())` behavior.
 pub fn read_task_lines(name: &str, max_lines: usize) -> Vec<String> {
     let content = match read_state_md(name) {
         Some(c) => c,
         None => return Vec::new(),
     };
-    let mut in_task = false;
-    let mut out: Vec<String> = Vec::new();
-    for line in content.lines() {
-        if line.starts_with("## ") {
-            if in_task {
-                break;
-            }
-            in_task = line == "## Task";
-            continue;
-        }
-        if !in_task {
-            continue;
-        }
-        let t = line.trim();
-        if t.is_empty() {
-            // stop at the first blank line after we've gathered content -
-            // keeps the gist to the Task's opening paragraph
-            if !out.is_empty() {
-                break;
-            }
-            continue;
-        }
-        let stripped = crate::render::strip_inline(t);
-        if stripped.is_empty() {
-            // markup-only line (e.g. an HTML comment) - no text to show; skip
-            // without treating it as a paragraph break
-            continue;
-        }
-        out.push(stripped);
-        if out.len() >= max_lines {
-            break;
-        }
-    }
-    out
+    let Some(task) = crate::render::sections(&content)
+        .into_iter()
+        .find(|s| s.title == "Task")
+    else {
+        return Vec::new();
+    };
+    task.body
+        .into_iter()
+        .take_while(|l| !l.is_empty())
+        .take(max_lines)
+        .map(|l| l.trim().to_string())
+        .collect()
 }
 
 /// Most recent progress entry, parsed into a one-line card gist.
