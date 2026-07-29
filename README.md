@@ -86,8 +86,7 @@ What happens on `csm <name> [--agent <x>]`:
 
 It does **not** modify any file in your repo (the working-mode prompt is global,
 in `~/.claude/CLAUDE.md`). Claude Code's `SessionStart` hook then fires, reads
-`CSM_SESSION`, and injects the session's `state.md` (+ a `progress.md` tail +
-scripts list + notes list) into context. The agent reads the working mode from
+`CSM_SESSION`, and injects the session's `state.md` (+ a `progress.md` tail) into context. The agent reads the working mode from
 `CLAUDE.md` and the current state from the hook injection.
 
 ## `/clear` revival
@@ -141,14 +140,12 @@ Machine-readable output is never styled: `csm hook` emits pure JSON on stdout.
 ] } }
 ```
 
-`csm hook` (the `SessionStart` handler):
-- reads the event JSON from stdin (`source` ∈ `startup | resume | clear | compact`);
+`csm hook` (the `SessionStart` handler, fired on startup / resume / `/clear` / compact):
 - reads `CSM_SESSION` from the environment (inherited from the `claude` process
   that `csm <name>` launched);
 - if set and known: self-heals the workspace, refreshes `last_access`, and
   prints `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`
-  containing the workspace path, `state.md`, a `progress.md` tail, the scripts
-  list, and the notes list;
+  containing the workspace path, `state.md`, and a `progress.md` tail;
 - otherwise: exits 0 with no output (injects nothing).
 
 stdout contains **only** the JSON object; all diagnostics go to stderr.
