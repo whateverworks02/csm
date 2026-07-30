@@ -51,7 +51,8 @@ pub fn pi_context_target() -> Result<PathBuf> {
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
 /// dirs if missing. Idempotent. Returns (path, modified).
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
-    let block = csm_block();
+    let home = crate::store::csm_home()?.display().to_string();
+    let block = csm_block(&home);
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let new_content = replace_or_prepend(&existing, &block);
     let modified = new_content != existing;

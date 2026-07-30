@@ -23,11 +23,15 @@ in each agent's own global instructions file (`~/.claude/CLAUDE.md`,
       *.py                # shared data-washing / utility scripts
 ```
 
+The data directory defaults to `~/.csm`; override with `CSM_HOME` (mirrors
+`CARGO_HOME` / `RUSTUP_HOME`). After changing `CSM_HOME`, re-run `csm init` so
+the injected prompt points at the new path.
+
 ## The three pillars
 
-1. **A kv index** (`~/.csm/index.json`) of sessions. Key = session name
+1. **A kv index** (`$CSM_HOME/index.json`, default `~/.csm`) of sessions. Key = session name
    (`csm <name>`). Value = `{origin_pwd, created_at, last_access, pinned}`.
-2. **A per-session workspace memory directory** (`~/.csm/sessions/<name>/`) -
+2. **A per-session workspace memory directory** (`$CSM_HOME/sessions/<name>/`) -
    just an address and a shared working area.
 3. **A carefully maintained working-mode prompt** injected into the global
    `~/.claude/CLAUDE.md` (by `csm init`), plus a `SessionStart` hook that
@@ -113,14 +117,14 @@ per-terminal binding, used only for this in-process revival.)
 | `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
 | `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |
-| `csm doctor` | Diagnose session/index consistency + agent wiring (hook, prompt, PATH, `csm hook` smoke-test, `~/.csm` writable); prints every check with ok/warn/error status. |
+| `csm doctor` | Diagnose session/index consistency + agent wiring (hook, prompt, PATH, `csm hook` smoke-test, `$CSM_HOME` writable); prints every check with ok/warn/error status. |
 | `csm doctor --fix` | Repair fixable issues (scaffold ghosts, fill incomplete); confirms each unless `--yes` (CI). Wiring points to `csm init`. |
 | `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`. |
 | `csm hook` | Internal - the `SessionStart` hook handler (reads stdin JSON). |
 
 **GC is a hard delete.** Pinned sessions are never listed or deleted by `gc`.
 
-**Something off?** Run `csm doctor` - it checks wiring (hook, prompt, PATH, smoke-test, `~/.csm` writable) and session/index consistency, and tells you what to do (`csm doctor --fix` repairs the fixable bits).
+**Something off?** Run `csm doctor` - it checks wiring (hook, prompt, PATH, smoke-test, `$CSM_HOME` writable) and session/index consistency, and tells you what to do (`csm doctor --fix` repairs the fixable bits).
 
 ## Output & color
 
@@ -168,9 +172,9 @@ instead). The workspace is plain files, so you can point any other agent at
 trait + add a match arm" (see `src/agent.rs`).
 
 **Cross-repo**: the session **name** is the shared handle. Run `csm my-task` in
-both the frontend and backend repos; the same
-`~/.csm/sessions/my-task/state.md` is the shared task memory. Reference the
-session name in commits/PRs.
+both the frontend and backend repos; the same session workspace
+(`$CSM_HOME/sessions/my-task/state.md`) is the shared task memory. Reference
+the session name in commits/PRs.
 
 ## Design notes
 
@@ -192,6 +196,6 @@ session name in commits/PRs.
 ```sh
 # remove the SessionStart hook entry from ~/.claude/settings.json by hand, or edit it
 # remove the <!-- csm:begin -->..<!-- csm:end --> block from ~/.claude/CLAUDE.md
-rm -rf ~/.csm
+rm -rf "${CSM_HOME:-$HOME/.csm}"
 cargo uninstall csm
 ```

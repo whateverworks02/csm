@@ -29,7 +29,15 @@ pub struct Index {
     pub sessions: BTreeMap<String, SessionMeta>,
 }
 
+/// Root of csm's on-disk data. `$CSM_HOME` overrides the default `~/.csm`
+/// (mirrors `CARGO_HOME` / `RUSTUP_HOME` / `STARSHIP_CONFIG`): enables data
+/// relocation + test isolation. Empty/unset falls back to `$HOME/.csm`.
 pub fn csm_home() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("CSM_HOME") {
+        if !p.is_empty() {
+            return Ok(PathBuf::from(p));
+        }
+    }
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".csm"))
 }
@@ -205,4 +213,83 @@ pub fn delete_session(name: &str) -> Result<()> {
         std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    /// Saves the current `CSM_HOME` and restores it on drop — panic-safe.
+    struct CsmHomeGuard {
+        prior: Option<String>,
+    }
+
+    impl CsmHomeGuard {
+        fn new() -> Self {
+            CsmHomeGuard {
+                prior: std::env::var("CSM_HOME").ok(),
+            }
+        }
+    }
+
+    impl Drop for CsmHomeGuard {
+        fn drop(&mut self) {
+            match &self.prior {
+                Some(v) => std::env::set_var("CSM_HOME", v),
+                None => std::env::remove_var("CSM_HOME"),
+            }
+        }
+    }
+
+    /// Point `$CSM_HOME` at a temp dir for the closure, restore afterwards.
+    /// Tests touching the fs must be `#[serial]` - concurrent env mutation races.
+    fn with_csm_home<R>(f: impl FnOnce(&Path) -> R) -> R {
+        let _guard = CsmHomeGuard::new();
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("CSM_HOME", dir.path());
+        f(dir.path())
+    }
+
+    /// Set `$CSM_HOME` to an arbitrary value for the closure, restore afterwards.
+    fn with_csm_home_val<R>(val: &str, f: impl FnOnce() -> R) -> R {
+        let _guard = CsmHomeGuard::new();
+        std::env::set_var("CSM_HOME", val);
+        f()
+    }
+
+    #[test]
+    #[serial]
+    fn csm_home_uses_csm_home_when_set() {
+        with_csm_home(|dir| {
+            assert_eq!(csm_home().unwrap(), dir);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn csm_home_falls_back_when_csm_home_empty() {
+        with_csm_home_val("", || {
+            let home = csm_home().unwrap();
+            assert!(
+                home.ends_with(".csm"),
+                "empty CSM_HOME should fall back to $HOME/.csm, got {home:?}"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn touch_require_delete_round_trip_is_isolated() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("smoke", "/tmp/origin").unwrap();
+            assert_eq!(meta.origin_pwd, "/tmp/origin");
+            assert!(!meta.pinned);
+            assert!(require_session("smoke").is_ok());
+            delete_session("smoke").unwrap();
+            assert!(require_session("smoke").is_err());
+        });
+    }
 }
