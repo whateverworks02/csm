@@ -5,7 +5,6 @@ use crate::store::{self, SessionMeta};
 use crate::ui;
 use anyhow::Result;
 use chrono::Local;
-use std::io::Write;
 
 pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let idx = store::load_index()?;
@@ -43,7 +42,7 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
             ),
         );
         print_list(&candidates);
-        if yes || confirm("delete all of the above?")? {
+        if yes || ui::confirm("delete all of the above?")? {
             candidates.iter().map(|(k, _)| k.clone()).collect()
         } else {
             eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
@@ -89,7 +88,7 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
             for n in &selected {
                 eprintln!("  {}", ui::epaint(ui::CYAN_BOLD, n));
             }
-            if !confirm("proceed?")? {
+            if !ui::confirm("proceed?")? {
                 eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
                 return Ok(());
             }
@@ -117,13 +116,4 @@ fn print_list(rows: &[(String, SessionMeta)]) {
             ui::epaint(ui::DIM, &ui::abbrev_home(&m.origin_pwd)),
         );
     }
-}
-
-pub fn confirm(msg: &str) -> Result<bool> {
-    eprintln!("{}", ui::epaint(ui::BOLD, msg));
-    eprint!("  {} ", ui::epaint(ui::DIM, "[y/N]"));
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    Ok(line.trim().eq_ignore_ascii_case("y"))
 }

@@ -6,6 +6,7 @@ use crate::prompt::{csm_block, CSM_MARK_BEGIN, CSM_MARK_END};
 use crate::ui;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Path to the global user claude config dir (`~/.claude`).
 pub fn claude_dir() -> Result<PathBuf> {
@@ -63,18 +64,36 @@ pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
     Ok((path.to_path_buf(), modified))
 }
 
+/// Find the csm block's marker bounds in `content`: the byte offsets of
+/// [`CSM_MARK_BEGIN`] and [`CSM_MARK_END`] when both are present and in order
+/// (begin before end). Single source of truth for "is the block present?" -
+/// shared by [`replace_or_prepend`] (the write path: rewrite vs prepend) and
+/// [`prompt_block_present`] (the read path `doctor` uses), so install and
+/// diagnose agree on what "present" means.
+fn block_bounds(content: &str) -> Option<(usize, usize)> {
+    let begin = content.find(CSM_MARK_BEGIN)?;
+    let end = content.find(CSM_MARK_END)?;
+    (end >= begin).then_some((begin, end))
+}
+
+/// Read-only check: does `path` contain the csm prompt block? Used by `doctor`;
+/// mirrors the presence [`inject_file`] maintains (via [`block_bounds`]).
+pub fn prompt_block_present(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|s| block_bounds(&s).is_some())
+        .unwrap_or(false)
+}
+
 fn replace_or_prepend(existing: &str, block: &str) -> String {
-    let begin_idx = existing.find(CSM_MARK_BEGIN);
-    let end_idx = existing.find(CSM_MARK_END);
-    match (begin_idx, end_idx) {
-        (Some(b), Some(e)) if e >= b => {
+    match block_bounds(existing) {
+        Some((b, e)) => {
             let mut s = String::with_capacity(existing.len() + block.len());
             s.push_str(&existing[..b]);
             s.push_str(block);
             s.push_str(&existing[e + CSM_MARK_END.len()..]);
             s
         }
-        _ => {
+        None => {
             if existing.trim().is_empty() {
                 format!("{}\n", block)
             } else {
@@ -161,13 +180,12 @@ pub fn install_pi() -> Result<()> {
     Ok(())
 }
 
-/// Add a SessionStart hook (`csm hook`) to the settings if not already present.
-/// Returns true if the settings were modified.
-fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
+/// Read-only check: is the `csm hook` SessionStart entry already wired into
+/// `root`? Shared by [`ensure_sessionstart_hook`] (install) and `doctor`
+/// (diagnose), so install and diagnose agree on what "present" means.
+pub fn sessionstart_hook_present(root: &serde_json::Value) -> bool {
     const CMD: &str = "csm hook";
-
-    let already = root
-        .get("hooks")
+    root.get("hooks")
         .and_then(|h| h.get("SessionStart"))
         .and_then(|s| s.as_array())
         .is_some_and(|groups| {
@@ -180,8 +198,14 @@ fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
                         })
                     })
             })
-        });
-    if already {
+        })
+}
+
+/// Add a SessionStart hook (`csm hook`) to the settings if not already present.
+/// Returns true if the settings were modified.
+fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
+    const CMD: &str = "csm hook";
+    if sessionstart_hook_present(root) {
         return false;
     }
 
@@ -199,4 +223,19 @@ fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
         "hooks": [{ "type": "command", "command": CMD }]
     }));
     true
+}
+
+/// Read-only check: is the `csm` binary resolvable as a bare command on PATH
+/// (so the hook's `csm hook` will resolve)? Shared by `csm init` (install-time
+/// warning) and `doctor` (diagnose), like the other wiring presence checks.
+/// Uses `which csm` rather than `current_exe()`: the hook invokes csm by bare
+/// name, so only a PATH lookup reflects what the hook will actually see.
+pub fn which_csm() -> Option<PathBuf> {
+    Command::new("which")
+        .arg("csm")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(PathBuf::from)
 }

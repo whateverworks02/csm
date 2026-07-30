@@ -15,6 +15,7 @@
 //! Other agents (e.g. `pi`) inject at launch instead; see `agent.rs`.
 
 mod agent;
+mod doctor;
 mod gc;
 mod hook;
 mod inject;
@@ -27,8 +28,6 @@ mod workspace;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::Write;
-use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(
@@ -90,6 +89,17 @@ enum Cmd {
         yes: bool,
     },
 
+    /// Diagnose session/index consistency and agent wiring; `--fix` repairs.
+    Doctor {
+        /// Repair fixable issues (scaffold ghosts, fill incomplete). Confirms
+        /// each finding unless `--yes`.
+        #[arg(long)]
+        fix: bool,
+        /// With `--fix`, skip confirmations (non-interactive / CI; requires `--fix`).
+        #[arg(short = 'y', long, requires = "fix")]
+        yes: bool,
+    },
+
     /// Install agent wiring: the SessionStart hook into ~/.claude/settings.json
     /// and the csm working-mode prompt into ~/.claude/CLAUDE.md and
     /// ~/.pi/agent/CLAUDE.md.
@@ -138,6 +148,7 @@ fn try_main() -> Result<()> {
         Some(Cmd::Show { name }) => cmd_show(name),
         Some(Cmd::Detail { name }) => cmd_detail(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
+        Some(Cmd::Doctor { fix, yes }) => doctor::run(fix, yes),
         Some(Cmd::Init) => cmd_init(),
         Some(Cmd::Version) => {
             println!("csm {}", env!("CARGO_PKG_VERSION"));
@@ -369,7 +380,7 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
             name,
             ui::abbrev_path(&dir),
         );
-        if !gc::confirm(&msg)? {
+        if !ui::confirm(&msg)? {
             eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
             return Ok(());
         }
@@ -559,7 +570,7 @@ fn cmd_init() -> Result<()> {
     // Install every known agent's global state-injection wiring (Claude's
     // SessionStart hook + CLAUDE.md, pi's CLAUDE.md). Idempotent.
     agent::install_all()?;
-    match which_csm() {
+    match inject::which_csm() {
         Some(p) => ui::step("found", &format!("csm on PATH at {}", ui::abbrev_path(&p))),
         None => ui::warn(
             "`csm` not on PATH; the hook command `csm hook` will fail. \
@@ -567,14 +578,4 @@ fn cmd_init() -> Result<()> {
         ),
     }
     Ok(())
-}
-
-fn which_csm() -> Option<PathBuf> {
-    Command::new("which")
-        .arg("csm")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .map(PathBuf::from)
 }
