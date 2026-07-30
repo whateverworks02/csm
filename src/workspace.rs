@@ -8,6 +8,10 @@ use std::fs;
 /// existing files are never overwritten.
 pub fn ensure_workspace(name: &str, meta: &SessionMeta) -> Result<()> {
     let dir = session_dir(name)?;
+    // Create the session directory first. The state.md/progress.md writes
+    // below need it to exist; `ensure_subdir` would create it too, but only
+    // after these writes (which would then fail with os error 2).
+    fs::create_dir_all(&dir)?;
 
     let state_md = dir.join("state.md");
     if !state_md.exists() {
