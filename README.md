@@ -113,10 +113,14 @@ per-terminal binding, used only for this in-process revival.)
 | `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
 | `csm gc` | Interactive picker - delete unpinned sessions by index. |
 | `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |
+| `csm doctor` | Diagnose session/index consistency + agent wiring (hook, prompt, PATH, `csm hook` smoke-test, `~/.csm` writable); prints every check with ok/warn/error status. |
+| `csm doctor --fix` | Repair fixable issues (scaffold ghosts, fill incomplete); confirms each unless `--yes` (CI). Wiring points to `csm init`. |
 | `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`. |
 | `csm hook` | Internal - the `SessionStart` hook handler (reads stdin JSON). |
 
 **GC is a hard delete.** Pinned sessions are never listed or deleted by `gc`.
+
+**Something off?** Run `csm doctor` - it checks wiring (hook, prompt, PATH, smoke-test, `~/.csm` writable) and session/index consistency, and tells you what to do (`csm doctor --fix` repairs the fixable bits).
 
 ## Output & color
 

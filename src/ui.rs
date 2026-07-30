@@ -10,7 +10,9 @@
 //! or bullets. Verbs and labels carry the meaning; paths and timestamps recede
 //! (dim, `~`-abbreviated). Errors use cargo's red `error:` prefix.
 
+use anyhow::Result;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::sync::OnceLock;
 
 use anstyle::{AnsiColor, Color, Style};
@@ -20,6 +22,7 @@ use anstyle::{AnsiColor, Color, Style};
 pub const BOLD: Style = Style::new().bold();
 pub const DIM: Style = Style::new().dimmed();
 pub const YELLOW: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+pub const GREEN: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 pub const GREEN_BOLD: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)));
@@ -111,6 +114,17 @@ pub fn hint(msg: &str) {
 pub fn no_sessions_hint() {
     eprintln!("{}", epaint(DIM, "no csm sessions yet."));
     hint("start one with: csm <name>");
+}
+
+/// `y/N` confirmation prompt on stderr. Returns true for `y` (case-insensitive);
+/// empty or anything else is false.
+pub fn confirm(msg: &str) -> Result<bool> {
+    eprintln!("{}", epaint(BOLD, msg));
+    eprint!("  {} ", epaint(DIM, "[y/N]"));
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
 // --- Path helpers -----------------------------------------------------------

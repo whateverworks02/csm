@@ -4,46 +4,76 @@ use crate::store::{now_iso, session_dir, SessionMeta};
 use anyhow::Result;
 use std::fs;
 
+/// One scaffold artifact: a path relative to the session dir and a function
+/// that renders its initial content (given the session name and origin pwd).
+struct Scaffold {
+    rel: &'static str,
+    content: fn(&str, &str) -> String,
+}
+
+/// Single source of truth for the per-session scaffold. [`ensure_workspace`]
+/// writes these; [`expected_files`] (used by `doctor`) lists their paths by
+/// iterating the same list - so the writer and the checker cannot drift (a file
+/// added here is both written and diagnosed; nothing to keep in sync by hand).
+const SCAFFOLD: &[Scaffold] = &[
+    Scaffold {
+        rel: "state.md",
+        content: state_content,
+    },
+    Scaffold {
+        rel: "progress.md",
+        content: progress_content,
+    },
+    Scaffold {
+        rel: "scripts/INDEX.md",
+        content: scripts_content,
+    },
+    Scaffold {
+        rel: "notes/INDEX.md",
+        content: notes_content,
+    },
+];
+
+/// The scaffold paths (relative to the session dir), for `doctor`'s
+/// incomplete-workspace check. Derived from [`SCAFFOLD`] so it can't drift.
+pub fn expected_files() -> impl Iterator<Item = &'static str> {
+    SCAFFOLD.iter().map(|s| s.rel)
+}
+
+fn state_content(name: &str, _origin_pwd: &str) -> String {
+    state_md_template(name)
+}
+
+fn progress_content(name: &str, origin_pwd: &str) -> String {
+    progress_md_template(name, origin_pwd)
+}
+
+fn scripts_content(name: &str, _origin_pwd: &str) -> String {
+    index_template(name, "scripts", "shared scripts")
+}
+
+fn notes_content(name: &str, _origin_pwd: &str) -> String {
+    index_template(name, "notes", "focused deep-dive articles")
+}
+
 /// Ensure the workspace for `name` exists with all scaffolding. Idempotent:
 /// existing files are never overwritten.
 pub fn ensure_workspace(name: &str, meta: &SessionMeta) -> Result<()> {
     let dir = session_dir(name)?;
-    // Create the session directory first. The state.md/progress.md writes
-    // below need it to exist; `ensure_subdir` would create it too, but only
-    // after these writes (which would then fail with os error 2).
+    // Create the session directory first; the per-entry writes below need a
+    // parent to exist (each entry's own parent is created on demand, but the
+    // session dir itself is the parent of the top-level files).
     fs::create_dir_all(&dir)?;
 
-    let state_md = dir.join("state.md");
-    if !state_md.exists() {
-        fs::write(&state_md, state_md_template(name))?;
-    }
-
-    let progress_md = dir.join("progress.md");
-    if !progress_md.exists() {
-        fs::write(&progress_md, progress_md_template(name, &meta.origin_pwd))?;
-    }
-
-    ensure_subdir(
-        &dir,
-        "scripts",
-        &index_template(name, "scripts", "shared scripts"),
-    )?;
-    ensure_subdir(
-        &dir,
-        "notes",
-        &index_template(name, "notes", "focused deep-dive articles"),
-    )?;
-
-    Ok(())
-}
-
-/// Create a subdirectory and write its INDEX.md scaffold if missing.
-fn ensure_subdir(dir: &std::path::Path, subdir: &str, content: &str) -> Result<()> {
-    let path = dir.join(subdir);
-    fs::create_dir_all(&path)?;
-    let index = path.join("INDEX.md");
-    if !index.exists() {
-        fs::write(&index, content)?;
+    for s in SCAFFOLD {
+        let path = dir.join(s.rel);
+        if path.exists() {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, (s.content)(name, &meta.origin_pwd))?;
     }
     Ok(())
 }
