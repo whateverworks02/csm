@@ -240,3 +240,157 @@ pub fn which_csm() -> Option<PathBuf> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .map(PathBuf::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod block_bounds {
+        use super::*;
+
+        #[test]
+        fn ordered_markers_found() {
+            let content = format!("pre\n{CSM_MARK_BEGIN}\nbody\n{CSM_MARK_END}\nsuf");
+            let (b, e) = block_bounds(&content).expect("present and ordered");
+            assert!(b < e);
+            assert!(content[b..].starts_with(CSM_MARK_BEGIN));
+            assert!(content[e..].starts_with(CSM_MARK_END));
+        }
+
+        #[test]
+        fn end_before_begin_is_none() {
+            // Both markers present but reversed: must not match.
+            let content = format!("{CSM_MARK_END} {CSM_MARK_BEGIN}");
+            assert!(block_bounds(&content).is_none());
+        }
+
+        #[test]
+        fn missing_either_marker_is_none() {
+            assert!(block_bounds(CSM_MARK_BEGIN).is_none());
+            assert!(block_bounds(CSM_MARK_END).is_none());
+            assert!(block_bounds("no markers here").is_none());
+        }
+    }
+
+    mod replace_or_prepend {
+        use super::*;
+
+        #[test]
+        fn replaces_existing_block_in_place() {
+            let existing = format!("before\n{CSM_MARK_BEGIN}\nOLD\n{CSM_MARK_END}\nafter");
+            let block = csm_block("/data/csm");
+            let out = replace_or_prepend(&existing, &block);
+            assert!(out.starts_with(&format!("before\n{CSM_MARK_BEGIN}")));
+            assert!(out.ends_with(&format!("{CSM_MARK_END}\nafter")));
+            assert!(!out.contains("OLD"));
+            assert!(out.contains("/data/csm"));
+        }
+
+        #[test]
+        fn empty_or_whitespace_prepends_block_only() {
+            let block = csm_block("/h");
+            assert_eq!(replace_or_prepend("", &block), format!("{block}\n"));
+            assert_eq!(replace_or_prepend("   \n  ", &block), format!("{block}\n"));
+        }
+
+        #[test]
+        fn non_empty_without_block_prepends_with_blank_separator() {
+            let block = csm_block("/h");
+            let out = replace_or_prepend("existing content", &block);
+            assert_eq!(out, format!("{block}\n\nexisting content"));
+        }
+
+        #[test]
+        fn replacing_current_block_is_idempotent() {
+            let block = csm_block("/h");
+            // A file already holding this exact block is unchanged by another
+            // replace_or_prepend pass.
+            assert_eq!(replace_or_prepend(&block, &block), block);
+        }
+    }
+
+    mod sessionstart_hook {
+        use super::*;
+
+        fn wired() -> serde_json::Value {
+            serde_json::json!({
+                "hooks": {
+                    "SessionStart": [
+                        { "matcher": "", "hooks": [{ "type": "command", "command": "csm hook" }] }
+                    ]
+                }
+            })
+        }
+
+        #[test]
+        fn present_detected() {
+            assert!(sessionstart_hook_present(&wired()));
+        }
+
+        #[test]
+        fn absent_when_no_hooks_key() {
+            assert!(!sessionstart_hook_present(&serde_json::json!({})));
+        }
+
+        #[test]
+        fn wrong_command_not_detected() {
+            let v = serde_json::json!({
+                "hooks": { "SessionStart": [
+                    { "matcher": "", "hooks": [{ "type": "command", "command": "other" }] }
+                ] }
+            });
+            assert!(!sessionstart_hook_present(&v));
+        }
+
+        #[test]
+        fn wrong_matcher_not_detected() {
+            let v = serde_json::json!({
+                "hooks": { "SessionStart": [
+                    { "matcher": "Editor", "hooks": [{ "type": "command", "command": "csm hook" }] }
+                ] }
+            });
+            assert!(!sessionstart_hook_present(&v));
+        }
+
+        #[test]
+        fn sessionstart_not_array_not_detected() {
+            let v = serde_json::json!({ "hooks": { "SessionStart": "nope" } });
+            assert!(!sessionstart_hook_present(&v));
+        }
+
+        #[test]
+        fn matches_within_multiple_groups() {
+            let v = serde_json::json!({
+                "hooks": { "SessionStart": [
+                    { "matcher": "Editor", "hooks": [{ "type": "command", "command": "x" }] },
+                    { "matcher": "", "hooks": [{ "type": "command", "command": "csm hook" }] }
+                ] }
+            });
+            assert!(sessionstart_hook_present(&v));
+        }
+
+        #[test]
+        fn ensure_adds_when_absent() {
+            let mut root = serde_json::json!({});
+            assert!(ensure_sessionstart_hook(&mut root));
+            assert!(sessionstart_hook_present(&root));
+        }
+
+        #[test]
+        fn ensure_is_noop_when_present() {
+            let mut root = wired();
+            let before = root.clone();
+            assert!(!ensure_sessionstart_hook(&mut root));
+            assert_eq!(root, before);
+        }
+
+        #[test]
+        fn ensure_adds_into_existing_hooks_object() {
+            // hooks present but no SessionStart array -> added, other hooks kept.
+            let mut root = serde_json::json!({ "hooks": { "Stop": [] } });
+            assert!(ensure_sessionstart_hook(&mut root));
+            assert!(sessionstart_hook_present(&root));
+            assert!(root["hooks"]["Stop"].is_array());
+        }
+    }
+}

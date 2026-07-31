@@ -160,3 +160,147 @@ fn trim_section(mut s: Section) -> Section {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod strip_inline {
+        use super::*;
+
+        #[test]
+        fn plain_text_unchanged() {
+            assert_eq!(strip_inline("plain text"), "plain text");
+            assert_eq!(strip_inline(""), "");
+        }
+
+        #[test]
+        fn bold_and_italic() {
+            assert_eq!(strip_inline("**bold**"), "bold");
+            assert_eq!(strip_inline("*italic*"), "italic");
+            assert_eq!(strip_inline("**a**b**c**"), "abc");
+        }
+
+        #[test]
+        fn code_and_links() {
+            assert_eq!(strip_inline("`code`"), "code");
+            assert_eq!(strip_inline("[text](url)"), "text");
+            assert_eq!(strip_inline("[[wikilink]]"), "wikilink");
+        }
+
+        #[test]
+        fn html_comment_removed() {
+            assert_eq!(strip_inline("a<!-- comment -->b"), "ab");
+            // Unterminated comment falls through: "<!--" has no "-->" so the
+            // marker chars are copied literally.
+            assert_eq!(strip_inline("<!-- no close"), "<!-- no close");
+        }
+
+        #[test]
+        fn unmatched_markers_kept_literal() {
+            assert_eq!(strip_inline("**"), "**");
+            assert_eq!(strip_inline("*stray*"), "stray");
+            // A bullet-like "* " is not italic (next char is a space).
+            assert_eq!(strip_inline("* item"), "* item");
+        }
+
+        #[test]
+        fn multibyte_safe() {
+            // Byte-offset markers must land on UTF-8 boundaries.
+            assert_eq!(strip_inline("**日本**"), "日本");
+            assert_eq!(strip_inline("[[リンク]]"), "リンク");
+        }
+    }
+
+    mod truncate {
+        use super::*;
+
+        #[test]
+        fn short_or_equal_passthrough() {
+            assert_eq!(truncate("abc", 5), "abc");
+            assert_eq!(truncate("abcde", 5), "abcde");
+            assert_eq!(truncate("", 5), "");
+        }
+
+        #[test]
+        fn over_length_cuts_at_word_boundary() {
+            // "ab cd" -> last whitespace at byte 2 -> "ab…"
+            assert_eq!(truncate("ab cdef", 5), "ab…");
+            // No whitespace in the window -> hard cut at max.
+            assert_eq!(truncate("abcdef", 5), "abcde…");
+        }
+
+        #[test]
+        fn counts_chars_not_bytes() {
+            // 6 chars, max 3 -> cut to 3 chars (would be 9 bytes if byte-counted).
+            assert_eq!(truncate("日本語テスト", 3), "日本語…");
+        }
+
+        #[test]
+        fn max_zero_yields_just_ellipsis() {
+            // Characterizing current behavior: empty window, no whitespace, so
+            // cut_chars == 0 and only the ellipsis is appended.
+            assert_eq!(truncate("abc", 0), "…");
+        }
+    }
+
+    mod sections {
+        use super::*;
+
+        #[test]
+        fn no_headings_yields_empty() {
+            assert!(sections("").is_empty());
+            assert!(sections("# Title\n> quote\nplain").is_empty());
+        }
+
+        #[test]
+        fn h1_and_quote_dropped() {
+            let s = sections("# T\n> q\n## Task\nbody");
+            assert_eq!(s.len(), 1);
+            assert_eq!(s[0].title, "Task");
+            assert_eq!(s[0].body, vec!["body"]);
+        }
+
+        #[test]
+        fn multiple_sections_in_order() {
+            let s = sections("## A\nx\n## B\ny");
+            assert_eq!(s.len(), 2);
+            assert_eq!(s[0].title, "A");
+            assert_eq!(s[0].body, vec!["x"]);
+            assert_eq!(s[1].title, "B");
+            assert_eq!(s[1].body, vec!["y"]);
+        }
+
+        #[test]
+        fn comment_only_lines_dropped() {
+            let s = sections("## A\n<!-- c -->\nreal");
+            assert_eq!(s[0].body, vec!["real"]);
+        }
+
+        #[test]
+        fn leading_trailing_blanks_trimmed_internal_kept() {
+            let s = sections("## A\n\n\npara1\n\npara2\n\n");
+            // Leading/trailing blank lines removed; the break between para1 and
+            // para2 is preserved as an empty body line.
+            assert_eq!(s[0].body, vec!["para1", "", "para2"]);
+        }
+
+        #[test]
+        fn bodies_are_inline_stripped() {
+            let s = sections("## A\n**bold** and `code`");
+            assert_eq!(s[0].body, vec!["bold and code"]);
+        }
+
+        #[test]
+        fn substructure_preserved_as_text() {
+            let s = sections("## A\n### Sub\n- item\n- [ ] todo");
+            assert_eq!(s[0].body, vec!["### Sub", "- item", "- [ ] todo"]);
+        }
+
+        #[test]
+        fn title_is_trimmed() {
+            let s = sections("##   Spaced  \nbody");
+            assert_eq!(s[0].title, "Spaced");
+        }
+    }
+}
