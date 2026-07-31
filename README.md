@@ -1,201 +1,80 @@
 # csm
 
-**Workspace memory for coding agents** - cross-time, cross-repo, multi-agent.
+**Workspace memory for coding agents - cross-time, cross-repo, multi-agent.**
 
-csm gives every task a durable, agent-neutral workspace memory directory. Start
-a session with `csm <name>` (default agent: Claude Code); csm then injects the
-session's `state.md` on start / `/clear` - Claude Code via its SessionStart
-hook, `pi` via `--append-system-prompt` at launch. The working-mode prompt lives
-in each agent's own global instructions file (`~/.claude/CLAUDE.md`,
-`~/.pi/agent/CLAUDE.md`). Pick an agent with `--agent`: `csm my-task --agent pi`.
+[![CI](https://github.com/whateverworks02/csm/actions/workflows/ci.yml/badge.svg)](https://github.com/whateverworks02/csm/actions/workflows/ci.yml)
+[![latest release](https://img.shields.io/github/v/release/whateverworks02/csm)](https://github.com/whateverworks02/csm/releases)
+[![license: MIT](https://img.shields.io/github/license/whateverworks02/csm)](LICENSE)
+![platform: macOS arm64](https://img.shields.io/badge/platform-macOS%20arm64-lightgrey)
 
+csm gives every task a durable, agent-neutral workspace-memory directory. Start
+a session with `csm <name>` and it injects the session's `state.md` into the
+agent on launch - and again on every `/clear`. The agent keeps the memory
+current; **csm just provides the directory, the prompt, and the hook.**
+
+```text
+$ csm list
+NAME                  PIN   LAST ACCESS          ORIGIN
+fix-login-bug         *     2026-07-31 14:30     ~/projects/web
+refactor-checkout           2026-07-30 11:20     ~/projects/web
+
+$ csm show fix-login-bug
+fix-login-bug
+  origin      ~/projects/web
+  last access 2026-07-31 14:30
+  pinned      yes
+  task        Fix the silent auth failure on Safari 17. Token refresh returns 200 but the
+              session cookie isn't set when the request comes from a cross-origin iframe.
+  last        2026-07-31 14:30  root-caused to SameSite=None; Secure requirement
+  scripts     repro-safari.sh (1)
+  notes       safari-cookie-trap.md (1)
 ```
-~/.csm/
-  index.json              # kv: name -> {origin_pwd, created_at, last_access, pinned}
-  sessions/<name>/
-    state.md              # source of truth: Task, AC, SOP, Progress, Key links, Open questions
-    progress.md           # append-only, timestamped log
-    notes/
-      INDEX.md            # registry of focused deep-dive articles (discovery)
-      *.md                # flow analyses, diagrams, design/decision notes
-    scripts/
-      INDEX.md            # registry of shared scripts (tool discovery)
-      *.py                # shared data-washing / utility scripts
-```
 
-The data directory defaults to `~/.csm`; override with `CSM_HOME` (mirrors
-`CARGO_HOME` / `RUSTUP_HOME`). After changing `CSM_HOME`, re-run `csm init` so
-the injected prompt points at the new path.
+## Highlights
 
-## The three pillars
-
-1. **A kv index** (`$CSM_HOME/index.json`, default `~/.csm`) of sessions. Key = session name
-   (`csm <name>`). Value = `{origin_pwd, created_at, last_access, pinned}`.
-2. **A per-session workspace memory directory** (`$CSM_HOME/sessions/<name>/`) -
-   just an address and a shared working area.
-3. **A carefully maintained working-mode prompt** injected into the global
-   `~/.claude/CLAUDE.md` (by `csm init`), plus a `SessionStart` hook that
-   auto-injects the active session's `state.md`.
-
-The "magic" is the prompt: it specifies a disciplined working mode - orient on
-`state.md`, append to `progress.md`, write `notes/` for deep dives, maintain
-`scripts/INDEX.md` and `notes/INDEX.md`, prepare handoffs. The prompt is framed
-to stay dormant unless a csm session is active, so it's safe in the global
-CLAUDE.md. **Writing `state.md` / `progress.md` is entirely the agent's job**;
-csm only provides the directory, the prompt, and the hook.
-
-Why the prompt lives in `CLAUDE.md` (not in the hook's injected context): Claude
-Code treats hook-injected `additionalContext` as factual context; imperative
-instructions there can trigger prompt-injection defenses. `CLAUDE.md` is a
-normal context file where instructions are followed. The hook therefore injects
-only factual data (the workspace path + `state.md`), and `CLAUDE.md` carries the
-instructions.
+- Persists agent state across `/clear`, new sessions, and repos - orientation is one file read, not starting from scratch.
+- Plain markdown - diffable, greppable, editable, agent-neutral.
+- Multi-agent: Claude Code (default) and `pi`.
+- No repo pollution - the prompt lives in global `~/.claude/CLAUDE.md`; `csm <name>` never touches repo files.
+- Survives `/clear` - Claude Code fires the `SessionStart` hook again, the workspace comes back.
 
 ## Install
 
+**macOS (Apple Silicon):**
+
 ```sh
-cargo install --path .     # puts `csm` on ~/.cargo/bin (ensure it's on PATH)
-csm init                   # installs the SessionStart hook + injects the prompt into ~/.claude/CLAUDE.md and ~/.pi/agent/CLAUDE.md
+curl -fsSL https://raw.githubusercontent.com/whateverworks02/csm/main/install.sh | bash
 ```
 
-`csm init` is idempotent - it adds a single `SessionStart` hook (`csm hook`) to
-`~/.claude/settings.json` and a marked block to both `~/.claude/CLAUDE.md` and
-`~/.pi/agent/CLAUDE.md`, leaving all your other settings/content untouched.
+The installer puts the binary in `~/.local/bin` and runs `csm init` (the hook + the prompt) and `csm doctor` for you. Add `~/.local/bin` to `PATH` if it says so, then `csm <name>`.
+
+**From source** (any platform with Rust):
+
+```sh
+cargo install --path .
+csm init
+```
+
+> Linux / Intel-macOS prebuilts aren't out yet - build from source for now.
 
 ## Quickstart
 
 ```sh
 cd ~/proj/my-task
-csm my-task                 # create/refresh session "my-task", launch claude (default)
-csm my-task --agent pi      # same session, launch pi instead
+csm my-task                 # create/resume "my-task", launch claude (default)
+csm my-task --agent pi      # same session, launch pi
 ```
 
-Tip: if you use pi often, add a shell alias so `csp <name>` is shorthand for
-`csm <name> --agent pi`:
+## How it works
 
-```sh
-# in ~/.zshrc / ~/.bashrc
-alias csp='csm --agent pi'        # then: csp my-task
-```
+Three pieces: a kv **index** of sessions, a per-session **workspace** directory, and a **working-mode prompt** csm injects into `~/.claude/CLAUDE.md` plus a `SessionStart` hook that feeds the active session into your agent.
 
-What happens on `csm <name> [--agent <x>]`:
-- creates the session in `index.json` (recording `origin_pwd`) if new,
-  refreshes `last_access` otherwise;
-- scaffolds the workspace (`state.md`, `progress.md`, `scripts/INDEX.md`,
-  `notes/INDEX.md`) if missing;
-- launches the agent via its agent adapter. Claude Code runs `claude` with
-  `CSM_SESSION=<name>` (its SessionStart hook injects `state.md` on start /
-  `/clear`); `pi` runs `pi` with `--append-system-prompt <state>` and
-  `--session-dir` co-located under the workspace.
+The index lives at `~/.csm/index.json` (name → metadata). Each workspace lives at `~/.csm/sessions/<name>/` — `state.md` is the source of truth, `progress.md` is an append-only log, and `notes/` and `scripts/` have their own INDEX files.
 
-It does **not** modify any file in your repo (the working-mode prompt is global,
-in `~/.claude/CLAUDE.md`). Claude Code's `SessionStart` hook then fires, reads
-`CSM_SESSION`, and injects the session's `state.md` (+ a `progress.md` tail) into context. The agent reads the working mode from
-`CLAUDE.md` and the current state from the hook injection.
+The "magic" is the prompt. When `$CSM_SESSION` is set, the agent knows to orient on `state.md`, append to `progress.md`, write `notes/` for deep dives, and leave a handoff line before stopping. Without a session, the prompt does nothing — so it's safe in the global `CLAUDE.md`. **csm never writes the memory beyond the initial scaffold — the agent keeps it current.**
 
-## `/clear` revival
+The prompt lives in `CLAUDE.md` (not the hook) because Claude Code treats hook-injected context as factual data, and imperative instructions there can trip prompt-injection defenses. So the hook only injects *data* (`state.md` + a `progress.md` tail), `CLAUDE.md` carries the *instructions*, and on `/clear` the still-running process re-fires the hook and re-injects — the workspace comes back without restarting the session.
 
-`/clear` does **not** restart the `claude` process, so `CSM_SESSION` is still
-set. Claude Code fires `SessionStart` again with `source=clear`; the csm hook
-re-reads `CSM_SESSION` and re-injects `state.md`. The workspace memory is
-revived in place - no need to exit and re-run `csm`.
+## License
 
-(`csm <name>` unconditionally rebinds `CSM_SESSION`; the env var is the
-per-terminal binding, used only for this in-process revival.)
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| `csm` | Pick a session whose `origin_pwd` is the current dir and launch it. |
-| `csm <name> [--agent <x>]` | Start/resume session `<name>` and launch agent `<x>` (default `claude`; also `pi`). |
-| `csm list` | List sessions (sorted by last access; `*` = pinned). |
-| `csm pin <name>` / `csm unpin <name>` | Pin / unpin (pinned sessions are never GC'd). |
-| `csm show [name]` | Print a compact recognition card (name, metadata, task gist, last activity). Defaults to `$CSM_SESSION`, else opens a picker. |
-| `csm detail [name]` | Render a session's full `state.md`, read-only (the deep read). Same name resolution as `csm show`. |
-| `csm rm <name>` | Hard-delete a session (workspace dir + index entry). `--force` required for pinned; `--yes` skips confirm. |
-| `csm rename <old> <new>` | Rename a session and re-point its `origin_pwd` to the current dir (so bare `csm` lists it here). `csm rename <n> <n>` is a pure re-home. |
-| `csm gc` | Interactive picker - delete unpinned sessions by index. |
-| `csm gc --older-than Nd` | Delete unpinned sessions not accessed in the last N days. (`--yes` skips confirm.) |
-| `csm doctor` | Diagnose session/index consistency + agent wiring (hook, prompt, PATH, `csm hook` smoke-test, `$CSM_HOME` writable); prints every check with ok/warn/error status. |
-| `csm doctor --fix` | Repair fixable issues (scaffold ghosts, fill incomplete); confirms each unless `--yes` (CI). Wiring points to `csm init`. |
-| `csm init` | Install the `SessionStart` hook + inject the prompt into `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`. |
-| `csm hook` | Internal - the `SessionStart` hook handler (reads stdin JSON). |
-
-**GC is a hard delete.** Pinned sessions are never listed or deleted by `gc`.
-
-**Something off?** Run `csm doctor` - it checks wiring (hook, prompt, PATH, smoke-test, `$CSM_HOME` writable) and session/index consistency, and tells you what to do (`csm doctor --fix` repairs the fixable bits).
-
-## Output & color
-
-csm follows the cargo/bun convention: **status and progress go to stderr** (so
-they never pollute piped stdout), while **data goes to stdout** (`csm list`,
-`csm show`, `csm detail`). Output is colorized when writing to a terminal and automatically
-stripped when piped, honoring `NO_COLOR` (disable) and `CLICOLOR_FORCE` (force
-on). The style is cargo-like restraint - color, not icons: paths are
-abbreviated with `~`, `*` marks pinned sessions, and errors use cargo's red
-`error:` prefix.
-
-Machine-readable output is never styled: `csm hook` emits pure JSON on stdout.
-
-## How the hook works
-
-`csm init` adds to `~/.claude/settings.json`:
-
-```json
-{ "hooks": { "SessionStart": [
-  { "matcher": "", "hooks": [{ "type": "command", "command": "csm hook" }] }
-] } }
-```
-
-`csm hook` (the `SessionStart` handler, fired on startup / resume / `/clear` / compact):
-- reads `CSM_SESSION` from the environment (inherited from the `claude` process
-  that `csm <name>` launched);
-- if set and known: self-heals the workspace, refreshes `last_access`, and
-  prints `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`
-  containing the workspace path, `state.md`, and a `progress.md` tail;
-- otherwise: exits 0 with no output (injects nothing).
-
-stdout contains **only** the JSON object; all diagnostics go to stderr.
-
-## Cross-repo
-
-The workspace is just markdown + scripts. Supported agents: Claude Code
-(`--agent claude`, default) and `pi` (`--agent pi`). Both carry the working-mode
-prompt in a persistent global file they auto-discover - Claude in
-`~/.claude/CLAUDE.md`, pi in `~/.pi/agent/CLAUDE.md` (both written by `csm
-init`). At runtime only the per-session state snapshot is injected: Claude via
-its SessionStart hook (revives on `/clear`); pi at launch via
-`--append-system-prompt` (no in-process `/clear` revival - resume the pi session
-instead). The workspace is plain files, so you can point any other agent at
-`~/.csm/sessions/<name>/` by hand; adding an agent is "implement the `Agent`
-trait + add a match arm" (see `src/agent.rs`).
-
-**Cross-repo**: the session **name** is the shared handle. Run `csm my-task` in
-both the frontend and backend repos; the same session workspace
-(`$CSM_HOME/sessions/my-task/state.md`) is the shared task memory. Reference
-the session name in commits/PRs.
-
-## Design notes
-
-- **No `resume` handling needed.** csm's "state" (workspace memory) is distinct
-  from Claude Code's session state; they don't conflict. If `claude --resume`
-  fires `SessionStart` with `source=resume`, the hook just re-injects - harmless
-  and helpful.
-- **Single-user, single-machine.** Concurrency is not addressed in this version;
-  the kv index is a plain JSON file.
-- **Agents own the memory.** csm never writes `state.md` / `progress.md` beyond
-  the initial scaffold. All updates are the agent's responsibility, guided by
-  the `CLAUDE.md` prompt.
-- **No repo pollution.** The working-mode prompt lives in the global
-  `~/.claude/CLAUDE.md` and `~/.pi/agent/CLAUDE.md`; `csm <name>` never touches
-  repo files.
-
-## Uninstall
-
-```sh
-# remove the SessionStart hook entry from ~/.claude/settings.json by hand, or edit it
-# remove the <!-- csm:begin -->..<!-- csm:end --> block from ~/.claude/CLAUDE.md
-rm -rf "${CSM_HOME:-$HOME/.csm}"
-cargo uninstall csm
-```
+MIT
