@@ -10,10 +10,19 @@
 use crate::store;
 use crate::workspace;
 use anyhow::Result;
+use std::io::Write;
 
 const STATE_CAP: usize = 6000;
 
 pub fn run_hook() -> Result<()> {
+    run_hook_to(&mut std::io::stdout())
+}
+
+/// SessionStart hook body, writing the JSON result to `out` instead of stdout
+/// directly so tests can capture it. `run_hook` is the prod entry point
+/// (stdout); tests pass a buffer to assert the no-session-no-inject and
+/// emit-context paths without spawning a process.
+fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
     let name = match std::env::var("CSM_SESSION") {
         Ok(n) if !n.is_empty() => n,
         _ => return Ok(()), // no active session - inject nothing
@@ -28,13 +37,13 @@ pub fn run_hook() -> Result<()> {
     workspace::ensure_workspace(&name, &meta)?;
 
     let ctx = build_context(&name);
-    let out = serde_json::json!({
+    let payload = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": ctx,
         }
     });
-    println!("{}", serde_json::to_string(&out)?);
+    writeln!(out, "{}", serde_json::to_string(&payload)?)?;
     Ok(())
 }
 
@@ -71,4 +80,121 @@ fn read_state_capped(name: &str) -> String {
     }
     let truncated: String = state.chars().take(STATE_CAP).collect();
     format!("{truncated}\n...(state.md truncated; full file at the workspace directory)...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{with_csm_home, with_env, without_env};
+    use serial_test::serial;
+    use std::fs;
+
+    /// Create a session with a workspace and the given state.md / progress.md
+    /// bodies (overwriting the scaffolded files).
+    fn seed_session(name: &str, state: &str, progress: &str) {
+        let meta = store::touch_session(name, "/o").unwrap();
+        workspace::ensure_workspace(name, &meta).unwrap();
+        let dir = store::session_dir(name).unwrap();
+        fs::write(dir.join("state.md"), state).unwrap();
+        fs::write(dir.join("progress.md"), progress).unwrap();
+    }
+
+    /// Run the hook into a buffer and assert it injected nothing (no output).
+    fn assert_no_inject() {
+        let mut buf = Vec::new();
+        run_hook_to(&mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn build_context_renders_state_and_progress() {
+        with_csm_home(|_dir| {
+            seed_session("ws", "TASK BODY", "P1\nP2\n");
+            let ctx = build_context("ws");
+            assert!(ctx.contains("[csm] Active workspace memory session: \"ws\"."));
+            assert!(ctx.contains("--- state.md ---"));
+            assert!(ctx.contains("TASK BODY"));
+            assert!(ctx.contains("--- progress.md (recent) ---"));
+            assert!(ctx.contains("P1"));
+            assert!(ctx.contains("P2"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn build_context_falls_back_when_files_missing() {
+        with_csm_home(|_dir| {
+            // In the index but no workspace dir / files.
+            store::touch_session("ws", "/o").unwrap();
+            let ctx = build_context("ws");
+            assert!(ctx.contains("(state.md not found)"));
+            assert!(ctx.contains("(progress.md not found)"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn build_context_caps_oversized_state() {
+        with_csm_home(|_dir| {
+            let big = "a".repeat(STATE_CAP + 1);
+            seed_session("ws", &big, "tail\n");
+            let ctx = build_context("ws");
+            assert!(
+                ctx.contains("...(state.md truncated; full file at the workspace directory)...")
+            );
+            // Exactly STATE_CAP 'a's survive (contiguous); the +1th does not.
+            assert!(ctx.contains(&"a".repeat(STATE_CAP)));
+            assert!(!ctx.contains(&"a".repeat(STATE_CAP + 1)));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn run_hook_no_inject_when_csm_session_unset() {
+        with_csm_home(|_dir| {
+            without_env("CSM_SESSION", assert_no_inject);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn run_hook_no_inject_when_csm_session_empty() {
+        with_csm_home(|_dir| {
+            with_env("CSM_SESSION", "", assert_no_inject);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn run_hook_no_inject_for_unknown_session() {
+        with_csm_home(|_dir| {
+            with_env("CSM_SESSION", "ghost", || {
+                assert_no_inject();
+                // Unknown sessions are not created.
+                assert!(store::require_session("ghost").is_err());
+                assert!(!store::session_dir("ghost").unwrap().exists());
+            });
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn run_hook_emits_context_for_known_session() {
+        with_csm_home(|_dir| {
+            seed_session("ws", "TASK BODY", "P1\n");
+            with_env("CSM_SESSION", "ws", || {
+                let mut buf = Vec::new();
+                run_hook_to(&mut buf).unwrap();
+                let v: serde_json::Value =
+                    serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+                assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
+                let ctx = v["hookSpecificOutput"]["additionalContext"]
+                    .as_str()
+                    .unwrap();
+                assert!(ctx.contains("\"ws\""));
+                assert!(ctx.contains("TASK BODY"));
+            });
+        });
+    }
 }
