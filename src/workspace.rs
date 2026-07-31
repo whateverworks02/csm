@@ -249,7 +249,15 @@ fn index_template(name: &str, subdir: &str, description: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_progress_header;
+    use super::{
+        ensure_workspace, expected_files, parse_progress_header, read_last_activity,
+        read_progress_tail, read_task_lines,
+    };
+    use crate::store::{session_dir, touch_session};
+    use crate::test_support::with_csm_home;
+    use serial_test::serial;
+    use std::fs;
+    use std::path::Path;
 
     #[test]
     fn three_parts_drops_agent() {
@@ -293,5 +301,134 @@ mod tests {
         let (ts, summary) = parse_progress_header("ts - agent - a - b - c");
         assert_eq!(ts, "ts");
         assert_eq!(summary, "a - b - c");
+    }
+
+    // --- workspace integration (isolated $CSM_HOME) ---
+
+    /// Recursively collect file paths relative to `dir`, sorted.
+    fn rel_files(dir: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                for sub in rel_files(&path) {
+                    out.push(format!("{name}/{sub}"));
+                }
+            } else {
+                out.push(name);
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    #[serial]
+    fn ensure_workspace_scaffolds_exactly_expected_files() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            let mut expected: Vec<String> = expected_files().map(String::from).collect();
+            expected.sort();
+            assert_eq!(rel_files(&session_dir("ws").unwrap()), expected);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn ensure_workspace_idempotent_never_overwrites() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            // User customizes state.md.
+            let state_path = session_dir("ws").unwrap().join("state.md");
+            fs::write(&state_path, "# my custom state\n").unwrap();
+            // Re-run: must not overwrite existing files, but still creates any
+            // missing ones.
+            ensure_workspace("ws", &meta).unwrap();
+            assert_eq!(
+                fs::read_to_string(&state_path).unwrap(),
+                "# my custom state\n"
+            );
+            assert!(session_dir("ws").unwrap().join("progress.md").exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_progress_tail_returns_last_n_lines() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            fs::write(
+                session_dir("ws").unwrap().join("progress.md"),
+                "line1\nline2\nline3\nline4\n",
+            )
+            .unwrap();
+            assert_eq!(read_progress_tail("ws", 2).unwrap(), "line3\nline4");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_task_lines_first_paragraph_capped() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            fs::write(
+                session_dir("ws").unwrap().join("state.md"),
+                "# ws - state\n\n> q\n\n## Task\nfirst task line.\nsecond task line.\n\n## Progress\ndone\n",
+            )
+            .unwrap();
+            assert_eq!(
+                read_task_lines("ws", 5),
+                vec!["first task line.", "second task line."]
+            );
+            assert_eq!(read_task_lines("ws", 1), vec!["first task line."]);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_task_lines_empty_when_no_task_section() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            fs::write(
+                session_dir("ws").unwrap().join("state.md"),
+                "# ws - state\n\n## Other\nbody\n",
+            )
+            .unwrap();
+            assert!(read_task_lines("ws", 5).is_empty());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_last_activity_picks_newest_entry() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            fs::write(
+                session_dir("ws").unwrap().join("progress.md"),
+                "# ws - progress log\n\n> q\n\n## 2026-07-29 10:00 - csm - session created\n- init.\n\n## 2026-07-30 15:04 - claude - did thing\n- bullet\n",
+            )
+            .unwrap();
+            let act = read_last_activity("ws").expect("some activity");
+            assert_eq!(act.ts, "2026-07-30 15:04");
+            assert_eq!(act.summary, "did thing");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_last_activity_none_when_no_progress() {
+        with_csm_home(|_dir| {
+            // Session in the index but no workspace dir / progress.md.
+            touch_session("ws", "/o").unwrap();
+            assert!(read_last_activity("ws").is_none());
+        });
     }
 }

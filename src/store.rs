@@ -218,47 +218,9 @@ pub fn delete_session(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{with_csm_home, with_csm_home_val};
+    use crate::workspace::ensure_workspace;
     use serial_test::serial;
-    use std::path::Path;
-    use tempfile::TempDir;
-
-    /// Saves the current `CSM_HOME` and restores it on drop — panic-safe.
-    struct CsmHomeGuard {
-        prior: Option<String>,
-    }
-
-    impl CsmHomeGuard {
-        fn new() -> Self {
-            CsmHomeGuard {
-                prior: std::env::var("CSM_HOME").ok(),
-            }
-        }
-    }
-
-    impl Drop for CsmHomeGuard {
-        fn drop(&mut self) {
-            match &self.prior {
-                Some(v) => std::env::set_var("CSM_HOME", v),
-                None => std::env::remove_var("CSM_HOME"),
-            }
-        }
-    }
-
-    /// Point `$CSM_HOME` at a temp dir for the closure, restore afterwards.
-    /// Tests touching the fs must be `#[serial]` - concurrent env mutation races.
-    fn with_csm_home<R>(f: impl FnOnce(&Path) -> R) -> R {
-        let _guard = CsmHomeGuard::new();
-        let dir = TempDir::new().unwrap();
-        std::env::set_var("CSM_HOME", dir.path());
-        f(dir.path())
-    }
-
-    /// Set `$CSM_HOME` to an arbitrary value for the closure, restore afterwards.
-    fn with_csm_home_val<R>(val: &str, f: impl FnOnce() -> R) -> R {
-        let _guard = CsmHomeGuard::new();
-        std::env::set_var("CSM_HOME", val);
-        f()
-    }
 
     #[test]
     #[serial]
@@ -323,5 +285,119 @@ mod tests {
         assert_eq!(b[7], b'-');
         assert_eq!(b[10], b' ');
         assert_eq!(b[13], b':');
+    }
+
+    // --- store CRUD integration (isolated $CSM_HOME) ---
+
+    /// Read the session's state.md as a marker (proves a dir wasn't rewritten).
+    fn state_marker(name: &str) -> String {
+        std::fs::read_to_string(session_dir(name).unwrap().join("state.md")).unwrap()
+    }
+
+    #[test]
+    #[serial]
+    fn touch_session_never_overwrites_origin_pwd() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("a", "/orig").unwrap();
+            assert_eq!(meta.origin_pwd, "/orig");
+            assert!(!meta.pinned);
+
+            // A second touch with a different origin must not overwrite the
+            // original - origin_pwd is set only at creation.
+            let _ = touch_session("a", "/different").unwrap();
+            assert_eq!(require_session("a").unwrap().origin_pwd, "/orig");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn touch_if_exists_returns_none_for_unknown_and_does_not_create() {
+        with_csm_home(|_dir| {
+            assert!(touch_if_exists("ghost").unwrap().is_none());
+            assert!(require_session("ghost").is_err());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn touch_if_exists_refreshes_known_session() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/orig").unwrap();
+            let meta = touch_if_exists("a").unwrap().expect("known session");
+            assert_eq!(meta.origin_pwd, "/orig");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn set_pinned_toggles_and_errors_unknown() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/o").unwrap();
+            set_pinned("a", true).unwrap();
+            assert!(require_session("a").unwrap().pinned);
+            set_pinned("a", false).unwrap();
+            assert!(!require_session("a").unwrap().pinned);
+            assert!(set_pinned("ghost", true).is_err());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rename_old_eq_new_only_re_homes() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("a", "/orig").unwrap();
+            ensure_workspace("a", &meta).unwrap();
+            let dir_before = session_dir("a").unwrap();
+            let marker = state_marker("a");
+
+            // old == new: re-point origin_pwd, no dir move, no rewrite.
+            rename_session("a", "a", "/new").unwrap();
+            assert_eq!(require_session("a").unwrap().origin_pwd, "/new");
+            assert_eq!(session_dir("a").unwrap(), dir_before);
+            assert_eq!(state_marker("a"), marker);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rename_bails_when_target_exists() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/oa").unwrap();
+            touch_session("b", "/ob").unwrap();
+            assert!(rename_session("a", "b", "/x").is_err());
+            // Both sessions unchanged.
+            assert_eq!(require_session("a").unwrap().origin_pwd, "/oa");
+            assert_eq!(require_session("b").unwrap().origin_pwd, "/ob");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn rename_moves_dir_and_rekeys_index() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("a", "/oa").unwrap();
+            ensure_workspace("a", &meta).unwrap();
+            assert!(session_dir("a").unwrap().exists());
+
+            rename_session("a", "c", "/oc").unwrap();
+            assert_eq!(require_session("c").unwrap().origin_pwd, "/oc");
+            assert!(require_session("a").is_err());
+            assert!(session_dir("c").unwrap().exists());
+            assert!(!session_dir("a").unwrap().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn delete_removes_dir_and_index_entry() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("a", "/oa").unwrap();
+            ensure_workspace("a", &meta).unwrap();
+            assert!(session_dir("a").unwrap().exists());
+
+            delete_session("a").unwrap();
+            assert!(require_session("a").is_err());
+            assert!(!session_dir("a").unwrap().exists());
+        });
     }
 }

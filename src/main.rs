@@ -22,6 +22,8 @@ mod inject;
 mod prompt;
 mod render;
 mod store;
+#[cfg(test)]
+mod test_support;
 mod ui;
 mod workspace;
 
