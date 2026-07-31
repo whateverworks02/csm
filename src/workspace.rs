@@ -246,3 +246,52 @@ fn index_template(name: &str, subdir: &str, description: &str) -> String {
 "#
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_progress_header;
+
+    #[test]
+    fn three_parts_drops_agent() {
+        let (ts, summary) = parse_progress_header("2026-07-30 15:04 - claude - did thing");
+        assert_eq!(ts, "2026-07-30 15:04");
+        assert_eq!(summary, "did thing");
+    }
+
+    #[test]
+    fn two_parts_ts_and_summary() {
+        let (ts, summary) = parse_progress_header("2026-07-30 15:04 - did thing");
+        assert_eq!(ts, "2026-07-30 15:04");
+        assert_eq!(summary, "did thing");
+    }
+
+    #[test]
+    fn one_part_becomes_summary() {
+        let (ts, summary) = parse_progress_header("only");
+        assert_eq!(ts, "");
+        assert_eq!(summary, "only");
+    }
+
+    #[test]
+    fn empty_header() {
+        let (ts, summary) = parse_progress_header("");
+        assert_eq!(ts, "");
+        assert_eq!(summary, "");
+    }
+
+    #[test]
+    fn segments_are_trimmed() {
+        let (ts, summary) = parse_progress_header("  ts  -  agent  -  summary  ");
+        assert_eq!(ts, "ts");
+        assert_eq!(summary, "summary");
+    }
+
+    #[test]
+    fn extra_separators_kept_in_summary() {
+        // splitn(3, " - "): only the first two splits count; the rest stays in
+        // the summary verbatim.
+        let (ts, summary) = parse_progress_header("ts - agent - a - b - c");
+        assert_eq!(ts, "ts");
+        assert_eq!(summary, "a - b - c");
+    }
+}

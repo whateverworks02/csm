@@ -292,4 +292,36 @@ mod tests {
             assert!(require_session("smoke").is_err());
         });
     }
+
+    #[test]
+    fn parse_time_valid_preserves_instant() {
+        let dt = parse_time("2026-07-30T15:04:56+00:00").unwrap();
+        // The instant is timezone-independent.
+        assert_eq!(dt.timestamp(), 1785423896);
+    }
+
+    #[test]
+    fn parse_time_invalid_errors() {
+        assert!(parse_time("not-a-timestamp").is_err());
+    }
+
+    #[test]
+    fn format_ts_passes_through_unparseable() {
+        let raw = "not-a-timestamp";
+        assert_eq!(format_ts(raw), raw);
+    }
+
+    #[test]
+    fn format_ts_reformats_valid_input() {
+        // Rendered in the local zone, so assert shape (not the exact string) to
+        // stay TZ-independent: "%Y-%m-%d %H:%M" is always 16 chars.
+        let out = format_ts("2026-07-30T15:04:56+00:00");
+        assert_ne!(out, "2026-07-30T15:04:56+00:00");
+        assert_eq!(out.len(), 16);
+        let b = out.as_bytes();
+        assert_eq!(b[4], b'-');
+        assert_eq!(b[7], b'-');
+        assert_eq!(b[10], b' ');
+        assert_eq!(b[13], b':');
+    }
 }
