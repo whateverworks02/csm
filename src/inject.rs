@@ -393,4 +393,170 @@ mod tests {
             assert!(root["hooks"]["Stop"].is_array());
         }
     }
+
+    mod inject_file {
+        use super::*;
+        use crate::test_support::with_csm_home;
+        use serial_test::serial;
+        use std::fs;
+        use tempfile::TempDir;
+
+        /// Fresh temp `CLAUDE.md` target. The returned `TempDir` must stay
+        /// bound for the test's scope - it owns the dir and cleans it on drop.
+        fn temp_target() -> (TempDir, PathBuf) {
+            let dir = TempDir::new().unwrap();
+            let target = dir.path().join("CLAUDE.md");
+            (dir, target)
+        }
+
+        #[test]
+        #[serial]
+        fn creates_and_prepends_block() {
+            with_csm_home(|home| {
+                let (_dir, target) = temp_target();
+                let (_, modified) = inject_file(&target).unwrap();
+                assert!(modified);
+                let content = fs::read_to_string(&target).unwrap();
+                assert!(content.contains(CSM_MARK_BEGIN));
+                assert!(content.contains(CSM_MARK_END));
+                // The block reflects the isolated $CSM_HOME (path dynamization).
+                assert!(content.contains(&home.display().to_string()));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn replaces_stale_block_no_duplicate() {
+            with_csm_home(|_home| {
+                let (_dir, target) = temp_target();
+                let stale = format!("header\n{CSM_MARK_BEGIN}\nSTALE\n{CSM_MARK_END}\nfooter\n");
+                fs::write(&target, &stale).unwrap();
+                let (_, modified) = inject_file(&target).unwrap();
+                assert!(modified);
+                let content = fs::read_to_string(&target).unwrap();
+                assert_eq!(content.matches(CSM_MARK_BEGIN).count(), 1);
+                assert_eq!(content.matches(CSM_MARK_END).count(), 1);
+                assert!(!content.contains("STALE"));
+                assert!(content.contains("header"));
+                assert!(content.contains("footer"));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn idempotent_when_block_current() {
+            with_csm_home(|_home| {
+                let (_dir, target) = temp_target();
+                inject_file(&target).unwrap();
+                let after_first = fs::read_to_string(&target).unwrap();
+                let (_, modified) = inject_file(&target).unwrap();
+                assert!(!modified);
+                assert_eq!(fs::read_to_string(&target).unwrap(), after_first);
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn prepends_before_existing_content() {
+            with_csm_home(|_home| {
+                let (_dir, target) = temp_target();
+                fs::write(&target, "user content\n").unwrap();
+                inject_file(&target).unwrap();
+                let content = fs::read_to_string(&target).unwrap();
+                assert!(content.starts_with(CSM_MARK_BEGIN));
+                assert!(content.contains("user content"));
+            });
+        }
+    }
+
+    mod install_claude {
+        use super::*;
+        use crate::test_support::with_isolated_home;
+        use serial_test::serial;
+        use std::fs;
+
+        #[test]
+        #[serial]
+        fn writes_hook_and_block() {
+            with_isolated_home(|home| {
+                install_claude().unwrap();
+                let claude_dir = home.join(".claude");
+                let root: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+                )
+                .unwrap();
+                assert!(sessionstart_hook_present(&root));
+                let md = fs::read_to_string(claude_dir.join("CLAUDE.md")).unwrap();
+                assert!(md.contains(CSM_MARK_BEGIN));
+                assert!(md.contains(CSM_MARK_END));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn idempotent_no_duplicate_hook_or_block() {
+            with_isolated_home(|home| {
+                install_claude().unwrap();
+                let s_before =
+                    fs::read_to_string(home.join(".claude").join("settings.json")).unwrap();
+                let m_before = fs::read_to_string(home.join(".claude").join("CLAUDE.md")).unwrap();
+                // Second run must not duplicate the hook or the block.
+                install_claude().unwrap();
+                let s_after =
+                    fs::read_to_string(home.join(".claude").join("settings.json")).unwrap();
+                let m_after = fs::read_to_string(home.join(".claude").join("CLAUDE.md")).unwrap();
+                assert_eq!(s_after, s_before);
+                assert_eq!(m_after, m_before);
+                assert_eq!(m_after.matches(CSM_MARK_BEGIN).count(), 1);
+                let root: serde_json::Value = serde_json::from_str(&s_after).unwrap();
+                assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+            });
+        }
+    }
+
+    mod pi_context_target {
+        use super::*;
+        use crate::test_support::with_home;
+        use serial_test::serial;
+        use std::fs;
+
+        #[test]
+        #[serial]
+        fn defaults_to_claude_md_when_empty() {
+            with_home(|home| {
+                let target = pi_context_target().unwrap();
+                assert_eq!(target, home.join(".pi").join("agent").join("CLAUDE.md"));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn prefers_agents_md() {
+            with_home(|home| {
+                let dir = home.join(".pi").join("agent");
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(dir.join("AGENTS.md"), "x").unwrap();
+                assert_eq!(pi_context_target().unwrap(), dir.join("AGENTS.md"));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn first_match_wins_in_precedence_order() {
+            with_home(|home| {
+                let dir = home.join(".pi").join("agent");
+                fs::create_dir_all(&dir).unwrap();
+                // AGENTS.md (candidate 0) beats CLAUDE.md (candidate 2).
+                fs::write(dir.join("CLAUDE.md"), "x").unwrap();
+                fs::write(dir.join("AGENTS.md"), "x").unwrap();
+                assert_eq!(pi_context_target().unwrap(), dir.join("AGENTS.md"));
+            });
+        }
+
+        // The uppercase case-variant candidates (AGENTS.MD, CLAUDE.MD) exist for
+        // pi compatibility but aren't portably testable: on a case-insensitive
+        // FS (macOS default) CLAUDE.MD and CLAUDE.md are the same file, so
+        // candidate 2 always shadows candidate 3. Different-basename precedence
+        // (AGENTS.* > CLAUDE.*) is covered above and is FS-independent.
+    }
 }
