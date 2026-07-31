@@ -1,0 +1,70 @@
+name: release
+
+# Publish a prebuilt `csm` binary as a GitHub Release asset. Triggered by a
+# `v*` tag push; `workflow_dispatch` runs the build without publishing so the
+# job can be smoke-tested before cutting a tag.
+#
+# Asset layout:
+#   csm-<target>.tar.gz            # single `csm` binary at the archive root
+#   csm-<target>.tar.gz.sha256     # "<hash>  csm-<target>.tar.gz"
+#
+# Adding a target (e.g. x86_64-apple-darwin, Linux) is one matrix row.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    permissions:
+      contents: read # checkout
+      actions: write # upload-artifact
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build (release, locked)
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package tarball + checksum
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # `-C .../release csm` puts the binary at the archive root.
+          tar czf "csm-${TARGET}.tar.gz" -C "target/${TARGET}/release" csm
+          shasum -a 256 "csm-${TARGET}.tar.gz" > "csm-${TARGET}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csm-${{ matrix.target }}
+          path: |
+            csm-${{ matrix.target }}.tar.gz
+            csm-${{ matrix.target }}.tar.gz.sha256
+
+  release:
+    name: publish release
+    needs: build
+    # Only publish on a real tag push. Manual workflow_dispatch runs build only.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write # create release + upload assets
+      actions: read # download-artifact from the build job
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/*.tar.gz
+            assets/*.sha256
+          generate_release_notes: true
