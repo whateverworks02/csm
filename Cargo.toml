@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["ianchen"]
 description = "Workspace memory for coding agents - session-scoped, cross-repo."
 license = "MIT"
+repository = "https://github.com/whateverworks02/csm"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -24,3 +25,4 @@ path = "src/main.rs"
 
 [profile.release]
 opt-level = 2
+strip = true
