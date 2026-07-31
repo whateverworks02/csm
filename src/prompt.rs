@@ -27,10 +27,11 @@ A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `progr
 
 1. **Orient first.** Read `state.md` fully; skim the `progress.md` tail and `notes/INDEX.md`.
 2. **Keep `state.md` tight and authoritative.** Move settled detail to `progress.md`; move deep dives to `notes/`.
-3. **Append `progress.md` after each meaningful change** (subtask done, decision, blocker, handoff). Entry: `## YYYY-MM-DD HH:MM - <agent> - <summary>` plus 1-3 bullets. Append only. Never rewrite history.
+3. **Append `progress.md` after each meaningful change** (subtask done, decision, blocker, handoff). Entry: `## YYYY-MM-DD HH:MM - <agent> - <summary>` plus 1-3 bullets. Append only. Never rewrite history. **Append via one shell append (quoted heredoc `>> progress.md <<'EOF' ... EOF`), not Edit** - a single `>>` write is atomic; Edit's read-modify-write races and can lose another agent's entry when a session is shared.
 4. **Maintain `scripts/INDEX.md` and `notes/INDEX.md`.** Add an entry per new script/note; update on rename/remove. Read the index before writing a new one.
 5. **Before you stop: update `state.md`** (Progress + Open questions current) **and append a `progress.md` handoff line** stating where to resume. Mandatory - the next agent's orientation depends on it.
 6. **Cross-repo:** the same session name in each repo shares one `state.md`. Reference the name in commits/PRs.
+7. **Multi-agent:** a session can be shared by concurrent agents across worktrees. Inter-agent task handoffs go in `progress.md` ('handoff -> <agent>: ...', resolved by a later 'done' entry) - not a separate task list.
 {end}",
         begin = CSM_MARK_BEGIN,
         end = CSM_MARK_END,
