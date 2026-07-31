@@ -9,6 +9,9 @@
 use std::path::Path;
 use tempfile::TempDir;
 
+use crate::store;
+use crate::workspace;
+
 /// Save one env var and restore it on drop - panic-safe.
 struct EnvGuard {
     key: &'static str,
@@ -82,4 +85,15 @@ pub(crate) fn without_env<R>(key: &'static str, f: impl FnOnce() -> R) -> R {
     let _g = EnvGuard::new(key);
     std::env::remove_var(key);
     f()
+}
+
+/// Create a session with a scaffolded workspace: `touch_session` (index entry)
+/// then `ensure_workspace` (state.md / progress.md / scripts/INDEX.md /
+/// notes/INDEX.md). The shared core of "make a healthy session" used by the
+/// `hook`, `gc`, and `doctor` integration tests. `#[serial]` (mutates
+/// `$CSM_HOME`).
+pub(crate) fn scaffold_session(name: &str) -> store::SessionMeta {
+    let meta = store::touch_session(name, "/o").unwrap();
+    workspace::ensure_workspace(name, &meta).unwrap();
+    meta
 }

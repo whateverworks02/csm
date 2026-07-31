@@ -92,8 +92,7 @@ mod tests {
     /// Create a session with a workspace and the given state.md / progress.md
     /// bodies (overwriting the scaffolded files).
     fn seed_session(name: &str, state: &str, progress: &str) {
-        let meta = store::touch_session(name, "/o").unwrap();
-        workspace::ensure_workspace(name, &meta).unwrap();
+        crate::test_support::scaffold_session(name);
         let dir = store::session_dir(name).unwrap();
         fs::write(dir.join("state.md"), state).unwrap();
         fs::write(dir.join("progress.md"), progress).unwrap();
