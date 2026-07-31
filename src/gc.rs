@@ -117,3 +117,86 @@ fn print_list(rows: &[(String, SessionMeta)]) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{scaffold_session, with_csm_home};
+    use serial_test::serial;
+
+    /// Set `name`'s `last_access` to `days_ago` days before now, as RFC3339
+    /// (what `now_iso` writes and `parse_time` reads). `last_access` is `pub`.
+    fn backdate(name: &str, days_ago: i64) {
+        let mut idx = store::load_index().unwrap();
+        let ts = (Local::now() - chrono::Duration::days(days_ago)).to_rfc3339();
+        idx.sessions.get_mut(name).unwrap().last_access = ts;
+        store::save_index(&idx).unwrap();
+    }
+
+    fn dir_exists(name: &str) -> bool {
+        store::session_dir(name)
+            .map(|d| d.exists())
+            .unwrap_or(false)
+    }
+
+    /// `run(Some(d), true)` is the stdin-free path: `yes=true` short-circuits
+    /// `ui::confirm`. (`run(None, _)` always reads stdin for index selection ->
+    /// not testable without a stdin seam; out of scope.)
+    #[test]
+    #[serial]
+    fn deletes_unpinned_older_than_threshold_and_keeps_recent() {
+        with_csm_home(|_dir| {
+            scaffold_session("old");
+            backdate("old", 10);
+            scaffold_session("recent"); // last_access = now
+            run(Some(5), true).unwrap();
+            assert!(!dir_exists("old"), "old unpinned session should be gc'd");
+            assert!(dir_exists("recent"), "recent session should be kept");
+            assert!(
+                store::require_session("old").is_err(),
+                "index entry removed"
+            );
+            assert!(store::require_session("recent").is_ok(), "index entry kept");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn skips_pinned_sessions() {
+        with_csm_home(|_dir| {
+            scaffold_session("pinned");
+            backdate("pinned", 10);
+            store::set_pinned("pinned", true).unwrap();
+            run(Some(5), true).unwrap();
+            assert!(dir_exists("pinned"), "pinned session must never be gc'd");
+            assert!(store::require_session("pinned").is_ok(), "index entry kept");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn threshold_is_inclusive_days() {
+        with_csm_home(|_dir| {
+            scaffold_session("edge");
+            backdate("edge", 5);
+            run(Some(5), true).unwrap();
+            assert!(
+                !dir_exists("edge"),
+                "exactly N days old meets the `>= N` threshold"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn no_unpinned_candidates_is_noop() {
+        with_csm_home(|_dir| {
+            // Only a pinned session -> no candidates -> early no-op.
+            scaffold_session("kept");
+            store::set_pinned("kept", true).unwrap();
+            run(Some(1), true).unwrap();
+            assert!(dir_exists("kept"));
+            assert!(store::require_session("kept").is_ok());
+        });
+    }
+}

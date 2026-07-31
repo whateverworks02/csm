@@ -485,3 +485,145 @@ struct Check {
     detail: String,
     fix: Option<Fix>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{scaffold_session, with_csm_home};
+    use serial_test::serial;
+    use std::fs;
+
+    /// Run consistency checks against the isolated `$CSM_HOME`.
+    /// (`doctor::run` itself `process::exit(1)`s on findings and runs wiring
+    /// checks that hit `~/.claude`/PATH/`which csm`/a `csm hook` subprocess -
+    /// not testable in-process. The consistency + fix logic is exercised here
+    /// via the private fns, which `use super::*` reaches.)
+    fn consistency() -> Vec<Check> {
+        let mut out = Vec::new();
+        consistency_checks(&mut out);
+        out
+    }
+
+    #[test]
+    #[serial]
+    fn healthy_session_is_all_ok() {
+        with_csm_home(|_dir| {
+            scaffold_session("ws");
+            let checks = consistency();
+            assert!(
+                checks.iter().all(|c| matches!(c.status, Status::Ok)),
+                "healthy session should yield only ok checks"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn detects_ghost_session() {
+        with_csm_home(|_dir| {
+            // Index entry, no workspace dir -> ghost.
+            store::touch_session("ghost", "/o").unwrap();
+            assert!(!store::session_dir("ghost").unwrap().exists());
+            let checks = consistency();
+            let ghost = checks
+                .iter()
+                .find(|c| matches!(c.fix, Some(Fix::Ghost { .. })))
+                .expect("ghost should be detected");
+            assert!(matches!(ghost.status, Status::Warn));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn detects_incomplete_session() {
+        with_csm_home(|_dir| {
+            scaffold_session("inc");
+            let dir = store::session_dir("inc").unwrap();
+            fs::remove_file(dir.join("state.md")).unwrap();
+            let checks = consistency();
+            let inc = checks
+                .iter()
+                .find(|c| matches!(c.fix, Some(Fix::Incomplete { .. })))
+                .expect("missing-file session should be detected as incomplete");
+            assert!(matches!(inc.status, Status::Warn));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn detects_orphan_dir_as_error_not_fixable() {
+        with_csm_home(|_dir| {
+            // A session dir with no index entry.
+            fs::create_dir_all(store::sessions_dir().unwrap().join("lonely")).unwrap();
+            let checks = consistency();
+            let orphan = checks
+                .iter()
+                .find(|c| c.label == "lonely")
+                .expect("untracked dir should be flagged");
+            assert!(matches!(orphan.status, Status::Error));
+            assert!(orphan.fix.is_none(), "orphan must not be auto-fixable");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn fix_ghost_scaffolds_and_is_idempotent() {
+        with_csm_home(|_dir| {
+            let _meta = store::touch_session("ghost", "/o").unwrap();
+            assert!(!store::session_dir("ghost").unwrap().exists());
+            // Detect -> apply the detected fix (end-to-end via `--yes`).
+            let checks = consistency();
+            let fix = checks
+                .iter()
+                .find_map(|c| c.fix.as_ref())
+                .expect("ghost should produce a fix");
+            assert!(
+                apply_fix(fix, true).unwrap(),
+                "yes=true scaffolds the ghost"
+            );
+            // Workspace now complete: no ghost, no incomplete.
+            let after = consistency();
+            assert!(
+                after.iter().all(|c| matches!(c.status, Status::Ok)),
+                "after fix the session should be healthy"
+            );
+            // Idempotent: re-running finds nothing left to fix.
+            assert!(
+                consistency().iter().find_map(|c| c.fix.as_ref()).is_none(),
+                "no fixable finding should remain after repair"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn fix_incomplete_fills_missing_and_is_idempotent() {
+        with_csm_home(|_dir| {
+            scaffold_session("inc");
+            let dir = store::session_dir("inc").unwrap();
+            fs::remove_file(dir.join("state.md")).unwrap();
+            fs::remove_file(dir.join("progress.md")).unwrap();
+            let checks = consistency();
+            let fix = checks
+                .iter()
+                .find_map(|c| c.fix.as_ref())
+                .expect("incomplete should produce a fix");
+            assert!(
+                apply_fix(fix, true).unwrap(),
+                "yes=true fills missing files"
+            );
+            // Missing files restored; pre-existing files (scripts/notes) kept.
+            assert!(dir.join("state.md").exists());
+            assert!(dir.join("progress.md").exists());
+            assert!(
+                dir.join("scripts/INDEX.md").exists(),
+                "pre-existing files kept"
+            );
+            // Idempotent: re-running finds nothing left to fix.
+            assert!(
+                consistency().iter().find_map(|c| c.fix.as_ref()).is_none(),
+                "no fixable finding should remain after repair"
+            );
+        });
+    }
+}
