@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub trait Agent {
-    /// Stable id ("claude", "pi"). Used by `--agent` and launch logs.
+    /// Stable id ("claude", "pi", "codex"). Used by `--agent` and launch logs.
     fn id(&self) -> &'static str;
 
     /// Build the launch command for session `name`. Owns its args/env.
