@@ -34,7 +34,7 @@ fix-login-bug
 
 - Persists agent state across `/clear`, new sessions, and repos - orientation is one file read, not starting from scratch.
 - Plain markdown - diffable, greppable, editable, agent-neutral.
-- Multi-agent: Claude Code (default) and `pi`.
+- Multi-agent: Claude Code (default), `pi`, and `codex`.
 - No repo pollution - the prompt lives in global `~/.claude/CLAUDE.md`; `csm <name>` never touches repo files.
 - Survives `/clear` - Claude Code fires the `SessionStart` hook again, the workspace comes back.
 
@@ -63,7 +63,12 @@ csm init
 cd ~/proj/my-task
 csm my-task                 # create/resume "my-task", launch claude (default)
 csm my-task --agent pi      # same session, launch pi
+csm my-task --agent codex   # same session, launch codex
 ```
+
+> codex: after `csm init`, run `/hooks` in your first codex session and trust
+> the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted,
+> csm revives the workspace on `/clear` and compaction.
 
 ## How it works
 

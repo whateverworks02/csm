@@ -48,6 +48,43 @@ pub fn pi_context_target() -> Result<PathBuf> {
     Ok(dir.join("CLAUDE.md"))
 }
 
+/// Path to the global user codex config dir (`~/.codex`), honoring `$CODEX_HOME`
+/// (codex's own override, mirroring `$CSM_HOME` -> `~/.csm`). codex
+/// auto-discovers `AGENTS.md` and `hooks.json` here - the direct analogs of
+/// Claude's `~/.claude/CLAUDE.md` and `settings.json`.
+pub fn codex_dir() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("CODEX_HOME") {
+        if !p.is_empty() {
+            return Ok(PathBuf::from(p));
+        }
+    }
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".codex"))
+}
+
+/// codex's global instructions precedence: `AGENTS.override.md` (if present and
+/// non-empty) else `AGENTS.md` - codex loads only the first non-empty file at
+/// the global scope. Mirroring [`pi_context_target`], csm must write into
+/// whichever file codex will actually load, else its block is silently ignored.
+pub fn codex_agents_target() -> Result<PathBuf> {
+    let dir = codex_dir()?;
+    let override_md = dir.join("AGENTS.override.md");
+    let override_loads = std::fs::read_to_string(&override_md).is_ok_and(|s| !s.trim().is_empty());
+    if override_loads {
+        return Ok(override_md);
+    }
+    Ok(dir.join("AGENTS.md"))
+}
+
+/// Path to the global user codex hooks file (`~/.codex/hooks.json`) - the
+/// analog of Claude's `~/.claude/settings.json` hooks. codex loads hooks from
+/// `hooks.json` or inline `[hooks]` in `config.toml`; csm uses the standalone
+/// `hooks.json` so it never touches the user's `config.toml` (model/provider
+/// settings live there).
+pub fn codex_hooks_path() -> Result<PathBuf> {
+    Ok(codex_dir()?.join("hooks.json"))
+}
+
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
 /// dirs if missing. Idempotent. Returns (path, modified).
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
@@ -104,6 +141,66 @@ fn replace_or_prepend(existing: &str, block: &str) -> String {
     }
 }
 
+/// Read a JSON file as a `serde_json::Value`, returning `{}` if the file is
+/// missing or empty. Shared by the agent hook installs (Claude `settings.json`,
+/// codex `hooks.json`) so both tolerate an absent/blank file identically.
+fn read_json_or_default(path: &Path) -> Result<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let data =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if data.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Ensure the `csm hook` SessionStart entry is present in the JSON file at
+/// `path` (Claude `settings.json` or codex `hooks.json` - same hooks shape, so
+/// [`ensure_sessionstart_hook`] works for both). Creates the file if missing;
+/// leaves all other entries untouched. Prints a `wrote`/`already present`
+/// status line. Returns whether the hook was newly written - codex uses this to
+/// decide whether to print its trust hint.
+fn ensure_sessionstart_hook_in_file(path: &Path) -> Result<bool> {
+    let mut root = read_json_or_default(path)?;
+    let written = ensure_sessionstart_hook(&mut root);
+    if written {
+        std::fs::write(path, serde_json::to_string_pretty(&root)?)?;
+        ui::step(
+            "wrote",
+            &format!("SessionStart hook to {}", ui::abbrev_path(path)),
+        );
+    } else {
+        eprintln!(
+            "{} {}",
+            ui::epaint(ui::DIM, "SessionStart hook already present at"),
+            ui::epaint(ui::DIM, &ui::abbrev_path(path)),
+        );
+    }
+    Ok(written)
+}
+
+/// Inject the csm working-mode prompt block into `path` and print an
+/// `injected`/`already present` status line. Thin status wrapper around
+/// [`inject_file`] shared by every agent install.
+fn inject_prompt_block(path: &Path) -> Result<()> {
+    let (_, modified) = inject_file(path)?;
+    if modified {
+        ui::step(
+            "injected",
+            &format!("prompt into {}", ui::abbrev_path(path)),
+        );
+    } else {
+        eprintln!(
+            "{} {}",
+            ui::epaint(ui::DIM, "prompt already present at"),
+            ui::epaint(ui::DIM, &ui::abbrev_path(path)),
+        );
+    }
+    Ok(())
+}
+
 /// Install Claude Code's state-injection wiring: the `SessionStart` hook in
 /// `~/.claude/settings.json` and the csm working-mode block in
 /// `~/.claude/CLAUDE.md`. Idempotent - leaves all other settings/content
@@ -111,50 +208,8 @@ fn replace_or_prepend(existing: &str, block: &str) -> String {
 pub fn install_claude() -> Result<()> {
     let claude_dir = claude_dir()?;
     std::fs::create_dir_all(&claude_dir)?;
-    let settings_path = claude_dir.join("settings.json");
-
-    // 1. Install the SessionStart hook (idempotent).
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let data = std::fs::read_to_string(&settings_path)
-            .with_context(|| format!("reading {}", settings_path.display()))?;
-        if data.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&data)
-                .with_context(|| format!("parsing {}", settings_path.display()))?
-        }
-    } else {
-        serde_json::json!({})
-    };
-    if ensure_sessionstart_hook(&mut root) {
-        std::fs::write(&settings_path, serde_json::to_string_pretty(&root)?)?;
-        ui::step(
-            "wrote",
-            &format!("SessionStart hook to {}", ui::abbrev_path(&settings_path)),
-        );
-    } else {
-        eprintln!(
-            "{} {}",
-            ui::epaint(ui::DIM, "SessionStart hook already present at"),
-            ui::epaint(ui::DIM, &ui::abbrev_path(&settings_path)),
-        );
-    }
-
-    // 2. Inject the csm working-mode prompt into the global CLAUDE.md.
-    let claude_md = claude_md_path()?;
-    let (_, modified) = inject_file(&claude_md)?;
-    if modified {
-        ui::step(
-            "injected",
-            &format!("prompt into {}", ui::abbrev_path(&claude_md)),
-        );
-    } else {
-        eprintln!(
-            "{} {}",
-            ui::epaint(ui::DIM, "prompt already present at"),
-            ui::epaint(ui::DIM, &ui::abbrev_path(&claude_md)),
-        );
-    }
+    ensure_sessionstart_hook_in_file(&claude_dir.join("settings.json"))?;
+    inject_prompt_block(&claude_md_path()?)?;
     Ok(())
 }
 
@@ -164,20 +219,38 @@ pub fn install_claude() -> Result<()> {
 /// (no hook needed), so the per-session state snapshot is all that's passed at
 /// launch time. Idempotent. This is `PiAgent::install`.
 pub fn install_pi() -> Result<()> {
-    let pi_md = pi_context_target()?;
-    let (_, modified) = inject_file(&pi_md)?;
-    if modified {
-        ui::step(
-            "injected",
-            &format!("prompt into {}", ui::abbrev_path(&pi_md)),
-        );
-    } else {
-        eprintln!(
-            "{} {}",
-            ui::epaint(ui::DIM, "prompt already present at"),
-            ui::epaint(ui::DIM, &ui::abbrev_path(&pi_md)),
+    inject_prompt_block(&pi_context_target()?)?;
+    Ok(())
+}
+
+/// Install codex's state-injection wiring: a `SessionStart` hook in
+/// `~/.codex/hooks.json` and the csm working-mode block in `~/.codex/AGENTS.md`
+/// (or `AGENTS.override.md` if codex loads that - see [`codex_agents_target`]).
+/// Idempotent - leaves all other hooks/content untouched. This is
+/// `CodexAgent::install`.
+///
+/// Unlike Claude, codex requires non-managed command hooks to be reviewed and
+/// trusted (against the hook's hash) via `/hooks` before they run; when the
+/// hook is newly written `csm init` prints a trust hint so a fresh install
+/// isn't silently inert. The `csm hook` handler is reused unchanged - codex's
+/// SessionStart accepts the same JSON Claude does.
+pub fn install_codex() -> Result<()> {
+    let codex_dir = codex_dir()?;
+    std::fs::create_dir_all(&codex_dir)?;
+    let hook_written = ensure_sessionstart_hook_in_file(&codex_hooks_path()?)?;
+    inject_prompt_block(&codex_agents_target()?)?;
+
+    // codex skips non-managed command hooks until they are reviewed/trusted
+    // via `/hooks`. Only hint when the hook was just written (re-runs don't
+    // re-trigger trust review); if an existing hook is untrusted, codex itself
+    // warns at startup.
+    if hook_written {
+        ui::warn(
+            "codex requires hooks to be trusted: in a codex session run `/hooks` \
+             and trust the `csm hook` SessionStart entry, or it will be skipped.",
         );
     }
+
     Ok(())
 }
 
@@ -558,5 +631,109 @@ mod tests {
         // FS (macOS default) CLAUDE.MD and CLAUDE.md are the same file, so
         // candidate 2 always shadows candidate 3. Different-basename precedence
         // (AGENTS.* > CLAUDE.*) is covered above and is FS-independent.
+    }
+
+    mod codex_dir {
+        use super::*;
+        use crate::test_support::{with_env, with_home, without_env};
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn honors_codex_home() {
+            with_home(|home| {
+                with_env("CODEX_HOME", "/custom/codex", || {
+                    assert_eq!(codex_dir().unwrap(), PathBuf::from("/custom/codex"));
+                });
+                without_env("CODEX_HOME", || {
+                    assert_eq!(codex_dir().unwrap(), home.join(".codex"));
+                });
+            });
+        }
+    }
+
+    mod codex_agents_target {
+        use super::*;
+        use crate::test_support::with_home;
+        use serial_test::serial;
+        use std::fs;
+
+        #[test]
+        #[serial]
+        fn defaults_to_agents_md_when_empty() {
+            with_home(|home| {
+                let target = codex_agents_target().unwrap();
+                assert_eq!(target, home.join(".codex").join("AGENTS.md"));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn prefers_nonempty_override() {
+            with_home(|home| {
+                let dir = home.join(".codex");
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(dir.join("AGENTS.override.md"), "x").unwrap();
+                assert_eq!(
+                    codex_agents_target().unwrap(),
+                    dir.join("AGENTS.override.md")
+                );
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn ignores_empty_override() {
+            with_home(|home| {
+                let dir = home.join(".codex");
+                fs::create_dir_all(&dir).unwrap();
+                // An empty override is skipped by Codex, so csm targets AGENTS.md.
+                fs::write(dir.join("AGENTS.override.md"), "   \n  ").unwrap();
+                assert_eq!(codex_agents_target().unwrap(), dir.join("AGENTS.md"));
+            });
+        }
+    }
+
+    mod install_codex {
+        use super::*;
+        use crate::test_support::with_isolated_home;
+        use serial_test::serial;
+        use std::fs;
+
+        #[test]
+        #[serial]
+        fn writes_hook_and_block() {
+            with_isolated_home(|home| {
+                install_codex().unwrap();
+                let codex_dir = home.join(".codex");
+                let root: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(codex_dir.join("hooks.json")).unwrap(),
+                )
+                .unwrap();
+                assert!(sessionstart_hook_present(&root));
+                let md = fs::read_to_string(codex_dir.join("AGENTS.md")).unwrap();
+                assert!(md.contains(CSM_MARK_BEGIN));
+                assert!(md.contains(CSM_MARK_END));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn idempotent_no_duplicate_hook_or_block() {
+            with_isolated_home(|home| {
+                install_codex().unwrap();
+                let h_before = fs::read_to_string(home.join(".codex").join("hooks.json")).unwrap();
+                let m_before = fs::read_to_string(home.join(".codex").join("AGENTS.md")).unwrap();
+                // Second run must not duplicate the hook or the block.
+                install_codex().unwrap();
+                let h_after = fs::read_to_string(home.join(".codex").join("hooks.json")).unwrap();
+                let m_after = fs::read_to_string(home.join(".codex").join("AGENTS.md")).unwrap();
+                assert_eq!(h_after, h_before);
+                assert_eq!(m_after, m_before);
+                assert_eq!(m_after.matches(CSM_MARK_BEGIN).count(), 1);
+                let root: serde_json::Value = serde_json::from_str(&h_after).unwrap();
+                assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+            });
+        }
     }
 }

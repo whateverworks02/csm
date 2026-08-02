@@ -10,9 +10,10 @@
 //!
 //! Semantic note: both agents carry the working-mode prompt in a persistent
 //! global file that they auto-discover - Claude in `~/.claude/CLAUDE.md`, pi in
-//! `~/.pi/agent/CLAUDE.md` (both written by `csm init`). At runtime only the
-//! per-session state snapshot is injected: Claude via its SessionStart hook
-//! (revives on `/clear`); pi at launch via `--append-system-prompt` (no
+//! `~/.pi/agent/CLAUDE.md`, codex in `~/.codex/AGENTS.md` (all written by
+//! `csm init`). At runtime only the per-session state snapshot is injected:
+//! Claude and codex via a SessionStart hook (revives on `/clear`; codex also
+//! on `compact`); pi at launch via `--append-system-prompt` (no
 //! in-process revival - resume the pi session instead).
 
 use crate::hook;
@@ -37,20 +38,30 @@ pub trait Agent {
     }
 }
 
+/// Every agent csm supports, in canonical order. Single source of truth for
+/// the agent set: `install_all` iterates it and `agent_for`'s error message
+/// lists it. The `agent_for` match arms stay explicit (each dispatches to a
+/// different struct), so adding an agent still means touching them.
+const KNOWN_AGENTS: &[&str] = &["claude", "pi", "codex"];
+
 /// Pick an agent by id. The "context" in strategy terms: it holds the chosen
 /// strategy and the rest of csm talks only to `dyn Agent`.
 pub fn agent_for(id: &str) -> Result<Box<dyn Agent>> {
     match id {
         "claude" => Ok(Box::new(ClaudeAgent)),
         "pi" => Ok(Box::new(PiAgent)),
-        other => anyhow::bail!("unknown agent {other:?} (expected: claude, pi)"),
+        "codex" => Ok(Box::new(CodexAgent)),
+        other => anyhow::bail!(
+            "unknown agent {other:?} (expected: {})",
+            KNOWN_AGENTS.join(", ")
+        ),
     }
 }
 
 /// Install global wiring for every known agent. Idempotent. Used by `csm init`
 /// so one command sets up every supported agent.
 pub fn install_all() -> Result<()> {
-    for id in ["claude", "pi"] {
+    for id in KNOWN_AGENTS {
         agent_for(id)?.install()?;
     }
     Ok(())
@@ -117,4 +128,31 @@ fn pi_session_dir(name: &str) -> PathBuf {
     store::session_dir(name)
         .map(|d| d.join(".pi-sessions"))
         .unwrap_or_else(|_| PathBuf::from(format!(".pi-sessions-{name}")))
+}
+
+// --- codex -----------------------------------------------------------------
+
+struct CodexAgent;
+
+impl Agent for CodexAgent {
+    fn id(&self) -> &'static str {
+        "codex"
+    }
+
+    fn launch(&self, name: &str) -> Command {
+        // Like Claude: `$CSM_SESSION` binds the session, and codex's
+        // SessionStart hook (in `~/.codex/hooks.json`, installed by
+        // `install()`) reads it to inject the state snapshot. codex fires
+        // SessionStart on startup, resume, `/clear`, and compact - so the
+        // workspace memory revives on all of them (broader than Claude, which
+        // only revives on `/clear`). The state snapshot is emitted by the hook
+        // at runtime, not passed here - so `csm hook` is reused unchanged.
+        let mut cmd = Command::new("codex");
+        cmd.env("CSM_SESSION", name);
+        cmd
+    }
+
+    fn install(&self) -> Result<()> {
+        inject::install_codex()
+    }
 }
