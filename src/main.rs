@@ -111,7 +111,8 @@ enum Cmd {
     #[command(hide = true)]
     Version,
 
-    /// Internal: Claude Code SessionStart hook handler (reads stdin JSON).
+    /// Internal: Claude Code SessionStart hook handler (reads `$CSM_SESSION`,
+    /// emits state context JSON on stdout).
     #[command(hide = true)]
     Hook,
 

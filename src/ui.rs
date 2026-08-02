@@ -46,7 +46,7 @@ pub const PIN_MARK: &str = "*";
 static STDOUT_COLOR: OnceLock<bool> = OnceLock::new();
 static STDERR_COLOR: OnceLock<bool> = OnceLock::new();
 
-/// Decide color for a stream from the env + tty. Follows CLICOLOR / NO_COLOR:
+/// Decide color for a stream from the env + tty. Follows `CLICOLOR_FORCE` / `NO_COLOR`:
 /// `NO_COLOR` (any value) disables; `CLICOLOR_FORCE` (non-zero) forces on;
 /// otherwise color iff the stream is a terminal.
 fn want_color(is_tty: bool) -> bool {

@@ -8,6 +8,8 @@
 //!       progress.md
 //!       scripts/INDEX.md
 //!       scripts/...
+//!       notes/INDEX.md
+//!       notes/...
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
