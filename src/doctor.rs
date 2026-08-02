@@ -6,9 +6,8 @@
 //!
 //! - Read-only by default; `--fix` repairs fixable issues (per-finding confirm,
 //!   `--fix --yes` skips prompts for CI).
-//! - Each check is one row with a status: `ok` / `warn` / `error`. By default
-//!   only non-ok rows are shown; `-v` lists every check (including passing
-//!   ones) so the checked surface area is visible.
+//! - Each check is one row with a status: `ok` / `warn` / `error`. All checks
+//!   are shown (grouped by category) so the checked surface area is visible.
 //! - Severity is meaningful: self-healing gaps (ghosts, incomplete scaffolds)
 //!   are `warn` - they resolve on the next `csm <name>` start because
 //!   [`workspace::ensure_workspace`] is idempotent. Missing wiring, malformed
