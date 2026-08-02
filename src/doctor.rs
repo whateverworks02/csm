@@ -249,36 +249,46 @@ fn wiring(label: &str, status: Status, detail: String) -> Check {
     }
 }
 
-fn wiring_checks(out: &mut Vec<Check>) {
-    // SessionStart hook in ~/.claude/settings.json (surface a malformed file,
-    // not just a missing hook).
-    let settings = inject::claude_dir().ok().map(|d| d.join("settings.json"));
-    let hook = match settings.as_ref().and_then(|p| fs::read_to_string(p).ok()) {
+/// Wiring check: does the SessionStart hook file at `path` (Claude
+/// `settings.json` or codex `hooks.json` - same hooks shape) contain the csm
+/// hook entry? `file_desc` labels the malformed-JSON error (e.g.
+/// "settings.json"). Report-only.
+fn check_hook(label: &str, path: Option<PathBuf>, file_desc: &str) -> Check {
+    let (status, detail) = match path {
         None => (Status::Error, INIT_HINT.to_string()),
-        Some(data) => match serde_json::from_str::<serde_json::Value>(&data) {
-            Ok(v) if inject::sessionstart_hook_present(&v) => {
-                (Status::Ok, ui::abbrev_path(settings.as_ref().unwrap()))
-            }
-            Ok(_) => (Status::Error, INIT_HINT.into()),
-            Err(e) => (Status::Error, format!("settings.json malformed: {e}")),
+        Some(p) => match fs::read_to_string(&p) {
+            Ok(data) => match serde_json::from_str::<serde_json::Value>(&data) {
+                Ok(v) if inject::sessionstart_hook_present(&v) => (Status::Ok, ui::abbrev_path(&p)),
+                Ok(_) => (Status::Error, INIT_HINT.into()),
+                Err(e) => (Status::Error, format!("{file_desc} malformed: {e}")),
+            },
+            Err(_) => (Status::Error, INIT_HINT.to_string()),
         },
     };
-    out.push(wiring("SessionStart hook", hook.0, hook.1));
+    wiring(label, status, detail)
+}
+
+/// Wiring check: does the agent context file at `path` contain the csm prompt
+/// block? Report-only. (pi uses a `Warn`-on-miss variant with a different
+/// detail format, kept inline in [`wiring_checks`].)
+fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
+    let (ok, detail) = match path {
+        Some(p) if inject::prompt_block_present(&p) => (true, ui::abbrev_path(&p)),
+        _ => (false, INIT_HINT.into()),
+    };
+    wiring(label, if ok { Status::Ok } else { Status::Error }, detail)
+}
+
+fn wiring_checks(out: &mut Vec<Check>) {
+    // SessionStart hook in ~/.claude/settings.json.
+    out.push(check_hook(
+        "SessionStart hook",
+        inject::claude_dir().ok().map(|d| d.join("settings.json")),
+        "settings.json",
+    ));
 
     // csm prompt block in ~/.claude/CLAUDE.md.
-    let claude_md = inject::claude_md_path().ok();
-    let claude_ok = claude_md
-        .as_ref()
-        .is_some_and(|p| inject::prompt_block_present(p));
-    out.push(wiring(
-        "claude prompt",
-        if claude_ok { Status::Ok } else { Status::Error },
-        if claude_ok {
-            ui::abbrev_path(claude_md.as_ref().unwrap())
-        } else {
-            INIT_HINT.into()
-        },
-    ));
+    out.push(check_prompt("claude prompt", inject::claude_md_path().ok()));
 
     // pi prompt block - only if pi is installed (~/.pi/agent exists).
     if inject::pi_dir().ok().is_some_and(|d| d.exists()) {
@@ -291,6 +301,21 @@ fn wiring_checks(out: &mut Vec<Check>) {
             "pi prompt",
             if pi_ok { Status::Ok } else { Status::Warn },
             detail,
+        ));
+    }
+
+    // codex SessionStart hook + prompt - only if codex is installed
+    // (~/.codex exists). The hook file shares Claude's JSON shape, so
+    // check_hook / check_prompt are reused.
+    if inject::codex_dir().ok().is_some_and(|d| d.exists()) {
+        out.push(check_hook(
+            "codex hook",
+            inject::codex_hooks_path().ok(),
+            "hooks.json",
+        ));
+        out.push(check_prompt(
+            "codex prompt",
+            inject::codex_agents_target().ok(),
         ));
     }
 
