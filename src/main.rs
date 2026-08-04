@@ -472,22 +472,35 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     };
     card_row("pinned", &pinned_styled);
 
-    // task - first paragraph of the Task section; the recognizer. First line
-    // carries the label, continuation lines indent under the value column.
-    let task_lines = workspace::read_task_lines(&name, 5);
+    // context - first paragraph of the Context section; the recognizer. First
+    // line carries the label, continuation lines indent under the value column.
+    // (Falls back to a legacy `## Task` section for pre-tasks-model sessions.)
+    let context_lines = workspace::read_context_lines(&name, 5);
     let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
-    if task_lines.is_empty() {
-        card_row("task", &ui::paint(ui::DIM, "(none)"));
+    if context_lines.is_empty() {
+        card_row("context", &ui::paint(ui::DIM, "(none)"));
     } else {
-        for (i, line) in task_lines.iter().enumerate() {
+        for (i, line) in context_lines.iter().enumerate() {
             let val = render::truncate(line, 100);
             if i == 0 {
-                card_row("task", &val);
+                card_row("context", &val);
             } else {
                 println!("{}{}", cont, val);
             }
         }
     }
+
+    // tasks - status counts from tasks/INDEX.md (the board). The board is the
+    // operational center; counts tell an orienting agent whether there's work
+    // to claim (open/fix) or review (review). "(none)" when no entries.
+    let tasks_val = match workspace::read_tasks_board(&name) {
+        Some(b) if b.total() > 0 => format!(
+            "open {}, review {}, fix {}, done {}",
+            b.open, b.pending_review, b.pending_fix, b.done,
+        ),
+        _ => ui::paint(ui::DIM, "(none)").to_string(),
+    };
+    card_row("tasks", &tasks_val);
 
     // last - most recent progress entry: timestamp + summary.
     let last = match workspace::read_last_activity(&name) {
@@ -555,7 +568,26 @@ fn cmd_detail(name: Option<String>) -> Result<()> {
         }
     };
 
-    for section in render::sections(&content) {
+    print_sections(render::sections(&content));
+
+    // The task board - the operational center. The deep read includes it so an
+    // orienting coordinator/worker sees the full status board, not just the
+    // state one-pager. Empty sections render as `(none)`, consistent with
+    // state.md - that's the healthy-state signal, not noise.
+    if let Some(board_content) = workspace::read_tasks_index_md(&name) {
+        println!("{}", ui::paint(ui::BOLD, "tasks"));
+        println!();
+        print_sections(render::sections(&board_content));
+    }
+    Ok(())
+}
+
+/// Render `## Section`s as a bold header + body (cargo aesthetic), each
+/// followed by a blank line; an empty body shows a dim `(none)`. Shared by
+/// `csm detail` for state.md and the tasks/INDEX.md board so the two render
+/// identically.
+fn print_sections(sections: Vec<render::Section>) {
+    for section in sections {
         println!("{}", ui::paint(ui::BOLD, &section.title));
         if section.body.is_empty() {
             println!("  {}", ui::paint(ui::DIM, "(none)"));
@@ -566,7 +598,6 @@ fn cmd_detail(name: Option<String>) -> Result<()> {
         }
         println!();
     }
-    Ok(())
 }
 
 fn cmd_init() -> Result<()> {

@@ -13,6 +13,7 @@ use anyhow::Result;
 use std::io::Write;
 
 const STATE_CAP: usize = 6000;
+const TASKS_CAP: usize = 4000;
 
 pub fn run_hook() -> Result<()> {
     run_hook_to(&mut std::io::stdout())
@@ -48,15 +49,19 @@ fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
 }
 
 /// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
-/// (capped), and a `progress.md` tail - the lean orientation memory. The agent
-/// discovers scripts/notes via the filesystem (`csm show` lists them; the
-/// working-mode prompt points at the INDEXes), so they aren't injected here.
-/// Used by both the SessionStart hook (`run_hook`) and the pi launch adapter.
+/// (capped), the `tasks/INDEX.md` board (capped), and a `progress.md` tail -
+/// the lean orientation memory. The prompt tells the agent these three files
+/// are the orientation surface and that the `[csm]` block is "only a snapshot
+/// of these", so the snapshot must include all three. The agent discovers
+/// scripts/notes via the filesystem (`csm show` lists them; the working-mode
+/// prompt points at the INDEXes), so they aren't injected here. Used by both
+/// the SessionStart hook (`run_hook`) and the pi launch adapter.
 pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let state = read_state_capped(name);
+    let tasks = read_tasks_capped(name);
     let progress = workspace::read_progress_tail(name, 40)
         .unwrap_or_else(|| "(progress.md not found)".to_string());
 
@@ -67,19 +72,40 @@ Workspace directory: {dir}
 --- state.md ---
 {state}
 
+--- tasks/INDEX.md ---
+{tasks}
+
 --- progress.md (recent) ---
 {progress}"
     )
 }
 
-fn read_state_capped(name: &str) -> String {
-    let state =
-        workspace::read_state_md(name).unwrap_or_else(|| "(state.md not found)".to_string());
-    if state.chars().count() <= STATE_CAP {
-        return state;
+/// Cap `content` at `cap` chars (by char count), appending a truncation note
+/// naming `label` (a file name) when it overflows. `None` content yields a
+/// "(label not found)" placeholder. Shared by the state.md and tasks/INDEX.md
+/// snapshots so the cap policy can't drift between them.
+fn read_capped(content: Option<String>, cap: usize, label: &str) -> String {
+    let content = match content {
+        Some(c) => c,
+        None => return format!("({label} not found)"),
+    };
+    if content.chars().count() <= cap {
+        return content;
     }
-    let truncated: String = state.chars().take(STATE_CAP).collect();
-    format!("{truncated}\n...(state.md truncated; full file at the workspace directory)...")
+    let truncated: String = content.chars().take(cap).collect();
+    format!("{truncated}\n...({label} truncated; full file at the workspace directory)...")
+}
+
+fn read_state_capped(name: &str) -> String {
+    read_capped(workspace::read_state_md(name), STATE_CAP, "state.md")
+}
+
+fn read_tasks_capped(name: &str) -> String {
+    read_capped(
+        workspace::read_tasks_index_md(name),
+        TASKS_CAP,
+        "tasks/INDEX.md",
+    )
 }
 
 #[cfg(test)]
@@ -107,13 +133,14 @@ mod tests {
 
     #[test]
     #[serial]
-    fn build_context_renders_state_and_progress() {
+    fn build_context_renders_state_tasks_progress() {
         with_csm_home(|_dir| {
             seed_session("ws", "TASK BODY", "P1\nP2\n");
             let ctx = build_context("ws");
             assert!(ctx.contains("[csm] Active workspace memory session: \"ws\"."));
             assert!(ctx.contains("--- state.md ---"));
             assert!(ctx.contains("TASK BODY"));
+            assert!(ctx.contains("--- tasks/INDEX.md ---"));
             assert!(ctx.contains("--- progress.md (recent) ---"));
             assert!(ctx.contains("P1"));
             assert!(ctx.contains("P2"));
@@ -128,6 +155,7 @@ mod tests {
             store::touch_session("ws", "/o").unwrap();
             let ctx = build_context("ws");
             assert!(ctx.contains("(state.md not found)"));
+            assert!(ctx.contains("(tasks/INDEX.md not found)"));
             assert!(ctx.contains("(progress.md not found)"));
         });
     }
@@ -145,6 +173,25 @@ mod tests {
             // Exactly STATE_CAP 'a's survive (contiguous); the +1th does not.
             assert!(ctx.contains(&"a".repeat(STATE_CAP)));
             assert!(!ctx.contains(&"a".repeat(STATE_CAP + 1)));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn build_context_caps_oversized_tasks() {
+        with_csm_home(|_dir| {
+            seed_session("ws", "state", "tail\n");
+            let dir = store::session_dir("ws").unwrap();
+            // Raw oversized content (the cap is byte-blind to board structure).
+            let big = "a".repeat(TASKS_CAP + 1);
+            fs::write(dir.join("tasks/INDEX.md"), &big).unwrap();
+            let ctx = build_context("ws");
+            assert!(ctx.contains(
+                "...(tasks/INDEX.md truncated; full file at the workspace directory)..."
+            ));
+            // Exactly TASKS_CAP 'a's survive (contiguous); the +1th does not.
+            assert!(ctx.contains(&"a".repeat(TASKS_CAP)));
+            assert!(!ctx.contains(&"a".repeat(TASKS_CAP + 1)));
         });
     }
 
@@ -193,6 +240,7 @@ mod tests {
                     .unwrap();
                 assert!(ctx.contains("\"ws\""));
                 assert!(ctx.contains("TASK BODY"));
+                assert!(ctx.contains("--- tasks/INDEX.md ---"));
             });
         });
     }
