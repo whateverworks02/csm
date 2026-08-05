@@ -28,8 +28,8 @@ A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks
 
 1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`.
 2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can do both - do whichever the current step needs.
-   - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC in the task file). Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix. Don't assign or track workers - they self-claim.
-   - **Worker actions**: claim one task from Open or Pending fix (no INDEX mark). Fill your task file's SOP + Progress; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
+   - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC + SOP in the task file - the procedure is part of the design). Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix. Don't assign or track workers - they self-claim.
+   - **Worker actions**: claim one task from Open or Pending fix (no INDEX mark). Execute its SOP, appending to the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
 3. **Stuck?** Add an Open questions bullet to your task file, then move your INDEX line to Pending review. The coordinator answers inline and moves you to Pending fix.
 4. **Write discipline.** csm files orient the next agent - don't duplicate what git already records. Default to not writing; before writing, ask: \"will the next agent need this to orient, claim, or review?\" If not, skip it.
 5. **Before you stop:** leave the files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: reviewed INDEX lines moved.
@@ -75,10 +75,11 @@ mod tests {
         // Role is action-derived, not a fixed identity.
         assert!(block.contains("Role follows action"));
         assert!(!block.contains("Know your role"));
-        // Coordinator creates + reviews; worker claims + submits.
+        // Coordinator creates (Scope+AC+SOP) + reviews; worker executes the SOP + submits.
         assert!(block.contains("Create tasks in Open"));
+        assert!(block.contains("Scope + AC + SOP"));
+        assert!(block.contains("Execute its SOP"));
         assert!(block.contains("approve to Done"));
-        assert!(block.contains("SOP + Progress"));
         assert!(block.contains("self-claim"));
         // state.md slimmed to Context + Key links.
         assert!(block.contains("## Context"));
