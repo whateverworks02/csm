@@ -88,9 +88,9 @@ pub(crate) fn without_env<R>(key: &'static str, f: impl FnOnce() -> R) -> R {
 }
 
 /// Create a session with a scaffolded workspace: `touch_session` (index entry)
-/// then `ensure_workspace` (state.md / progress.md / scripts/INDEX.md /
-/// notes/INDEX.md / tasks/INDEX.md). The shared core of "make a healthy
-/// session" used by the `hook`, `gc`, and `doctor` integration tests.
+/// then `ensure_workspace` (state.md / scripts/INDEX.md / notes/INDEX.md /
+/// tasks/INDEX.md). The shared core of "make a healthy session" used by the
+/// `hook`, `gc`, and `doctor` integration tests.
 /// `#[serial]` (mutates `$CSM_HOME`).
 pub(crate) fn scaffold_session(name: &str) -> store::SessionMeta {
     let meta = store::touch_session(name, "/o").unwrap();

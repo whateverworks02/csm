@@ -626,7 +626,7 @@ mod tests {
             scaffold_session("inc");
             let dir = store::session_dir("inc").unwrap();
             fs::remove_file(dir.join("state.md")).unwrap();
-            fs::remove_file(dir.join("progress.md")).unwrap();
+            fs::remove_file(dir.join("tasks/INDEX.md")).unwrap();
             let checks = consistency();
             let fix = checks
                 .iter()
@@ -638,7 +638,7 @@ mod tests {
             );
             // Missing files restored; pre-existing files (scripts/notes) kept.
             assert!(dir.join("state.md").exists());
-            assert!(dir.join("progress.md").exists());
+            assert!(dir.join("tasks/INDEX.md").exists());
             assert!(
                 dir.join("scripts/INDEX.md").exists(),
                 "pre-existing files kept"

@@ -446,6 +446,25 @@ fn card_row(label: &str, value: &str) {
     );
 }
 
+/// Render a card row with one or more value lines: the first line carries the
+/// label, continuation lines indent under the value column. "(none)" when empty.
+/// Shared by the `context` row (truncated state.md lines) and the `open`/`done`
+/// task-entry rows so the label/continuation layout can't drift between them.
+fn card_multiline_row(label: &str, lines: &[String]) {
+    let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
+    if lines.is_empty() {
+        card_row(label, &ui::paint(ui::DIM, "(none)"));
+        return;
+    }
+    for (i, val) in lines.iter().enumerate() {
+        if i == 0 {
+            card_row(label, val);
+        } else {
+            println!("{}{}", cont, val);
+        }
+    }
+}
+
 fn cmd_show(name: Option<String>) -> Result<()> {
     let Some(name) = resolve_session_name(name)? else {
         return Ok(());
@@ -453,8 +472,8 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     let meta = store::require_session(&name)?;
 
     // Card: name, then one row per field. Labels dim + fixed-width so values
-    // align; metadata recedes (dim), task/last carry the recognition signal
-    // (normal weight). No icons, no raw markdown - a glance should suffice.
+    // align; metadata recedes (dim), context/open/done carry the recognition
+    // signal (normal weight). No icons, no raw markdown - a glance should suffice.
     println!("{}", ui::paint(ui::CYAN_BOLD, &name));
     card_row(
         "origin",
@@ -472,53 +491,20 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     };
     card_row("pinned", &pinned_styled);
 
-    // context - first paragraph of the Context section; the recognizer. First
-    // line carries the label, continuation lines indent under the value column.
-    // (Falls back to a legacy `## Task` section for pre-tasks-model sessions.)
-    let context_lines = workspace::read_context_lines(&name, 5);
-    let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
-    if context_lines.is_empty() {
-        card_row("context", &ui::paint(ui::DIM, "(none)"));
-    } else {
-        for (i, line) in context_lines.iter().enumerate() {
-            let val = render::truncate(line, 100);
-            if i == 0 {
-                card_row("context", &val);
-            } else {
-                println!("{}{}", cont, val);
-            }
-        }
-    }
+    // context - first paragraph of the Context section; the recognizer. (Falls
+    // back to a legacy `## Task` section for pre-tasks-model sessions.)
+    let context_lines: Vec<String> = workspace::read_context_lines(&name, 5)
+        .into_iter()
+        .map(|l| render::truncate(&l, 100))
+        .collect();
+    card_multiline_row("context", &context_lines);
 
-    // tasks - status counts from tasks/INDEX.md (the board). The board is the
-    // operational center; counts tell an orienting agent whether there's work
-    // to claim (open/fix) or review (review). "(none)" when no entries.
-    let tasks_val = match workspace::read_tasks_board(&name) {
-        Some(b) if b.total() > 0 => format!(
-            "open {}, review {}, fix {}, done {}",
-            b.open, b.pending_review, b.pending_fix, b.done,
-        ),
-        _ => ui::paint(ui::DIM, "(none)").to_string(),
-    };
-    card_row("tasks", &tasks_val);
-
-    // last - most recent progress entry: timestamp + summary.
-    let last = match workspace::read_last_activity(&name) {
-        Some(act) if !act.summary.is_empty() => {
-            let head = if act.ts.is_empty() {
-                act.summary
-            } else {
-                format!(
-                    "{}  {}",
-                    ui::paint(ui::DIM, &store::format_ts(&act.ts)),
-                    act.summary
-                )
-            };
-            render::truncate(&head, 100)
-        }
-        _ => ui::paint(ui::DIM, "(none)").to_string(),
-    };
-    card_row("last", &last);
+    // tasks - the board is the operational center. The card lists Open (work to
+    // claim) and Done (accomplished) entries; Pending review/fix live on the
+    // full board (`csm detail`) - the card is a glance, not the whole board.
+    let board = workspace::read_tasks_board(&name).unwrap_or_default();
+    card_entries_row("open", &board.open);
+    card_entries_row("done", &board.done);
 
     let scripts = workspace::list_scripts(&name);
     card_list_row("scripts", &scripts);
@@ -526,6 +512,31 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     let notes = workspace::list_notes(&name);
     card_list_row("notes", &notes);
     Ok(())
+}
+
+/// Render a card row listing task entries (id + slug) for one board status.
+/// Up to `CAP` entries show; a dim `... +N more` line follows when there are
+/// more. The entry text is the board line after `- ` (e.g. `001 fix-cookie -
+/// wire SameSite`); we show the `id slug` prefix (up to the first ` - `) and
+/// drop the gist for a compact, recognizable row. Layout (label, continuation
+/// indent, "(none)") is shared via [`card_multiline_row`].
+fn card_entries_row(label: &str, entries: &[String]) {
+    const CAP: usize = 3;
+    let mut lines: Vec<String> = entries
+        .iter()
+        .take(CAP)
+        .map(|raw| {
+            raw.trim()
+                .split_once(" - ")
+                .map(|(head, _)| head.trim())
+                .unwrap_or_else(|| raw.trim())
+                .to_string()
+        })
+        .collect();
+    if entries.len() > CAP {
+        lines.push(ui::paint(ui::DIM, &format!("... +{} more", entries.len() - CAP)).to_string());
+    }
+    card_multiline_row(label, &lines);
 }
 
 /// Render a card row for a subdirectory listing: comma-joined names with a
