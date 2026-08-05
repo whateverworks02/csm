@@ -19,8 +19,8 @@ mod doctor;
 mod gc;
 mod hook;
 mod inject;
-mod prompt;
 mod markdown;
+mod prompt;
 mod store;
 #[cfg(test)]
 mod test_support;
