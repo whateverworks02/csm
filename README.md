@@ -7,36 +7,39 @@
 [![license: MIT](https://img.shields.io/github/license/whateverworks02/csm)](LICENSE)
 ![platform: macOS arm64](https://img.shields.io/badge/platform-macOS%20arm64-lightgrey)
 
-csm gives every task a durable, agent-neutral workspace-memory directory. Start
-a session with `csm <name>` and it injects the session's `state.md` into the
-agent on launch - and again on every `/clear`. The agent keeps the memory
-current; **csm just provides the directory, the prompt, and the hook.**
+csm gives every task a durable, agent-neutral workspace-memory directory. Start a session with `csm <name>` and the workspace is injected into the agent on launch - and again on every `/clear`. The agent keeps the memory current; csm provides the directory, the prompt, and the hook.
 
-```text
-$ csm list
-NAME                  PIN   LAST ACCESS          ORIGIN
-fix-login-bug         *     2026-07-31 14:30     ~/projects/web
-refactor-checkout           2026-07-30 11:20     ~/projects/web
+## The workspace
 
-$ csm show fix-login-bug
-fix-login-bug
-  origin      ~/projects/web
-  last access 2026-07-31 14:30
-  pinned      yes
-  task        Fix the silent auth failure on Safari 17. Token refresh returns 200 but the
-              session cookie isn't set when the request comes from a cross-origin iframe.
-  last        2026-07-31 14:30  root-caused to SameSite=None; Secure requirement
-  scripts     repro-safari.sh (1)
-  notes       safari-cookie-trap.md (1)
+Each session is a directory at `~/.csm/sessions/<name>/`:
+
+```
+<name>/
+├── state.md
+├── tasks/
+│   ├── INDEX.md
+│   └── <id>-<slug>.md
+├── notes/
+└── scripts/
 ```
 
-## Highlights
+- **`state.md`** - the session one-pager. Sections: `Context` (what this session is and why), `Key links` (repo, docs, related sessions). Read on every launch to recall what the session is about.
+- **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done.
+- **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (execution log), `Review` (coordinator feedback). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
+- **`notes/`** - focused deep-dive articles that outlive a single task; `notes/INDEX.md` is the registry.
+- **`scripts/`** - shared utility scripts; `scripts/INDEX.md` is the registry.
 
-- Persists agent state across `/clear`, new sessions, and repos - orientation is one file read, not starting from scratch.
-- Plain markdown - diffable, greppable, editable, agent-neutral.
-- Multi-agent: Claude Code (default), `pi`, and `codex`.
-- No repo pollution - the prompt lives in global `~/.claude/CLAUDE.md`; `csm <name>` never touches repo files.
-- Survives `/clear` - Claude Code fires the `SessionStart` hook again, the workspace comes back.
+## Task lifecycle
+
+Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can do both in a session.
+
+1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add a line under `Open` in `tasks/INDEX.md`.
+2. **Claim & execute** (worker): pick from `Open` or `Pending fix`; execute the `SOP`, appending to `Progress`.
+3. **Submit** (worker): move the INDEX line to `Pending review`.
+4. **Review** (coordinator): approve -> `Done`; or write `Review` + answer `Open questions` -> `Pending fix`.
+5. **Stuck** (worker): add an `Open questions` bullet, move the INDEX line to `Pending review`.
+
+`state.md` and `tasks/INDEX.md` are the orientation surface - injected into the agent on launch. Per-task files carry the detail; `notes/` and `scripts/` carry reusable knowledge.
 
 ## Install
 
@@ -66,19 +69,7 @@ csm my-task --agent pi      # same session, launch pi
 csm my-task --agent codex   # same session, launch codex
 ```
 
-> codex: after `csm init`, run `/hooks` in your first codex session and trust
-> the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted,
-> csm revives the workspace on `/clear` and compaction.
-
-## How it works
-
-Three pieces: a kv **index** of sessions, a per-session **workspace** directory, and a **working-mode prompt** csm injects into `~/.claude/CLAUDE.md` plus a `SessionStart` hook that feeds the active session into your agent.
-
-The index lives at `~/.csm/index.json` (name → metadata). Each workspace lives at `~/.csm/sessions/<name>/` — `state.md` is the source of truth, `progress.md` is an append-only log, and `notes/` and `scripts/` have their own INDEX files.
-
-The "magic" is the prompt. When `$CSM_SESSION` is set, the agent knows to orient on `state.md`, append to `progress.md`, write `notes/` for deep dives, and leave a handoff line before stopping. Without a session, the prompt does nothing — so it's safe in the global `CLAUDE.md`. **csm never writes the memory beyond the initial scaffold — the agent keeps it current.**
-
-The prompt lives in `CLAUDE.md` (not the hook) because Claude Code treats hook-injected context as factual data, and imperative instructions there can trip prompt-injection defenses. So the hook only injects *data* (`state.md` + a `progress.md` tail), `CLAUDE.md` carries the *instructions*, and on `/clear` the still-running process re-fires the hook and re-injects — the workspace comes back without restarting the session.
+> codex: after `csm init`, run `/hooks` in your first codex session and trust the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted, csm revives the workspace on `/clear` and compaction.
 
 ## License
 
