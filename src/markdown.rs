@@ -1,12 +1,12 @@
-//! Plain-text markdown rendering for `csm show` (card gists) and `csm detail`
-//! (full rendered state.md).
+//! Markdown text utilities: section parsing (`sections`, `strip_inline`) and
+//! display truncation (`truncate`).
 //!
-//! `csm show` is a recognition aid (which session is this?) - it shows
-//! one-line gists, so it only needs `strip_inline` + `truncate`. `csm detail`
-//! is the deep read, so `sections` splits a state.md into `## Section`s and
-//! inline-strips each body line. No styling here (that lives in `ui`), no
-//! Unicode glyphs - plain text that `cmd_show`/`cmd_detail` wrap in cargo-style
-//! color.
+//! `sections` splits a document into `## `-headed sections with inline markers
+//! stripped. It serves both display (`csm detail` renders state.md and the task
+//! board) and data extraction (`parse_tasks_board`, `read_context_lines` read
+//! workspace files). `truncate` caps a line for the `csm show` card. No styling
+//! here (that lives in `ui`), no Unicode glyphs - plain text that
+//! `cmd_show`/`cmd_detail` wrap in cargo-style color.
 
 /// Strip inline markdown markers from `text`, returning plain text. Unmatched
 /// markers (e.g. a lone `*`) are left literal.

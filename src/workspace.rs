@@ -107,7 +107,7 @@ pub struct TasksBoard {
 }
 
 /// Collect task entries per status from `tasks/INDEX.md` content. Layers on
-/// [`crate::render::sections`] (the single `## Section` scanner shared with
+/// [`crate::markdown::sections`] (the single `## Section` scanner shared with
 /// `csm detail` / `csm show`) so the board and the readers agree on what a
 /// section is. A task entry is a body line whose first non-space char is `-`
 /// with non-empty content after it; comment-only lines are already dropped by
@@ -115,7 +115,7 @@ pub struct TasksBoard {
 /// renamed statuses).
 pub fn parse_tasks_board(content: &str) -> TasksBoard {
     let mut board = TasksBoard::default();
-    for section in crate::render::sections(content) {
+    for section in crate::markdown::sections(content) {
         let entries: &mut Vec<String> = match section.title.as_str() {
             "Open" => &mut board.open,
             "Pending review" => &mut board.pending_review,
@@ -148,7 +148,7 @@ pub fn read_tasks_board(name: &str) -> Option<TasksBoard> {
 /// Capped at `max_lines`. Falls back to a legacy `## Task` section if Context
 /// is absent (pre-tasks-model sessions). Empty vec if neither section exists.
 ///
-/// Layers on `render::sections` (the single `## Section` scanner shared with
+/// Layers on `markdown::sections` (the single `## Section` scanner shared with
 /// `csm detail`) instead of re-scanning: find the Context (or legacy Task)
 /// section, take its first paragraph, cap it. Each line is trimmed to match the
 /// prior `strip_inline(line.trim())` behavior.
@@ -157,7 +157,7 @@ pub fn read_context_lines(name: &str, max_lines: usize) -> Vec<String> {
         Some(c) => c,
         None => return Vec::new(),
     };
-    let Some(section) = crate::render::sections(&content)
+    let Some(section) = crate::markdown::sections(&content)
         .into_iter()
         .find(|s| s.title == "Context" || s.title == "Task")
     else {
