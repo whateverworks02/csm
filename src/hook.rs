@@ -49,21 +49,19 @@ fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
 }
 
 /// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
-/// (capped), the `tasks/INDEX.md` board (capped), and a `progress.md` tail -
-/// the lean orientation memory. The prompt tells the agent these three files
-/// are the orientation surface and that the `[csm]` block is "only a snapshot
-/// of these", so the snapshot must include all three. The agent discovers
-/// scripts/notes via the filesystem (`csm show` lists them; the working-mode
-/// prompt points at the INDEXes), so they aren't injected here. Used by both
-/// the SessionStart hook (`run_hook`) and the pi launch adapter.
+/// (capped) and the `tasks/INDEX.md` board (capped) - the lean orientation
+/// memory. The prompt tells the agent these two files are the orientation
+/// surface and that the `[csm]` block is "only a snapshot of these", so the
+/// snapshot must include both. The agent discovers scripts/notes via the
+/// filesystem (`csm show` lists them; the working-mode prompt points at the
+/// INDEXes), so they aren't injected here. Used by both the SessionStart hook
+/// (`run_hook`) and the pi launch adapter.
 pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let state = read_state_capped(name);
     let tasks = read_tasks_capped(name);
-    let progress = workspace::read_progress_tail(name, 40)
-        .unwrap_or_else(|| "(progress.md not found)".to_string());
 
     format!(
         "[csm] Active workspace memory session: \"{name}\".
@@ -73,10 +71,7 @@ Workspace directory: {dir}
 {state}
 
 --- tasks/INDEX.md ---
-{tasks}
-
---- progress.md (recent) ---
-{progress}"
+{tasks}"
     )
 }
 
@@ -115,13 +110,12 @@ mod tests {
     use serial_test::serial;
     use std::fs;
 
-    /// Create a session with a workspace and the given state.md / progress.md
-    /// bodies (overwriting the scaffolded files).
-    fn seed_session(name: &str, state: &str, progress: &str) {
+    /// Create a session with a workspace and the given state.md body
+    /// (overwriting the scaffolded file).
+    fn seed_session(name: &str, state: &str) {
         crate::test_support::scaffold_session(name);
         let dir = store::session_dir(name).unwrap();
         fs::write(dir.join("state.md"), state).unwrap();
-        fs::write(dir.join("progress.md"), progress).unwrap();
     }
 
     /// Run the hook into a buffer and assert it injected nothing (no output).
@@ -133,17 +127,14 @@ mod tests {
 
     #[test]
     #[serial]
-    fn build_context_renders_state_tasks_progress() {
+    fn build_context_renders_state_tasks() {
         with_csm_home(|_dir| {
-            seed_session("ws", "TASK BODY", "P1\nP2\n");
+            seed_session("ws", "TASK BODY");
             let ctx = build_context("ws");
             assert!(ctx.contains("[csm] Active workspace memory session: \"ws\"."));
             assert!(ctx.contains("--- state.md ---"));
             assert!(ctx.contains("TASK BODY"));
             assert!(ctx.contains("--- tasks/INDEX.md ---"));
-            assert!(ctx.contains("--- progress.md (recent) ---"));
-            assert!(ctx.contains("P1"));
-            assert!(ctx.contains("P2"));
         });
     }
 
@@ -156,7 +147,6 @@ mod tests {
             let ctx = build_context("ws");
             assert!(ctx.contains("(state.md not found)"));
             assert!(ctx.contains("(tasks/INDEX.md not found)"));
-            assert!(ctx.contains("(progress.md not found)"));
         });
     }
 
@@ -165,7 +155,7 @@ mod tests {
     fn build_context_caps_oversized_state() {
         with_csm_home(|_dir| {
             let big = "a".repeat(STATE_CAP + 1);
-            seed_session("ws", &big, "tail\n");
+            seed_session("ws", &big);
             let ctx = build_context("ws");
             assert!(
                 ctx.contains("...(state.md truncated; full file at the workspace directory)...")
@@ -180,7 +170,7 @@ mod tests {
     #[serial]
     fn build_context_caps_oversized_tasks() {
         with_csm_home(|_dir| {
-            seed_session("ws", "state", "tail\n");
+            seed_session("ws", "state");
             let dir = store::session_dir("ws").unwrap();
             // Raw oversized content (the cap is byte-blind to board structure).
             let big = "a".repeat(TASKS_CAP + 1);
@@ -228,7 +218,7 @@ mod tests {
     #[serial]
     fn run_hook_emits_context_for_known_session() {
         with_csm_home(|_dir| {
-            seed_session("ws", "TASK BODY", "P1\n");
+            seed_session("ws", "TASK BODY");
             with_env("CSM_SESSION", "ws", || {
                 let mut buf = Vec::new();
                 run_hook_to(&mut buf).unwrap();

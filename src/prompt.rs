@@ -16,24 +16,23 @@ pub fn csm_block(csm_home: &str) -> String {
         "{begin}\n\
 ## csm workspace memory
 
-A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks/INDEX.md` + `progress.md` at `{csm_home}/sessions/$CSM_SESSION/` (a `[csm]` block, if present, is only a snapshot of these). If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
+A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks/INDEX.md` at `{csm_home}/sessions/$CSM_SESSION/` (a `[csm]` block, if present, is only a snapshot of these). If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
 
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
 - `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. No owner column. Move a task's line between sections to change its status.
 - `tasks/<id>-<slug>.md` - one file per task. Sections: Scope, AC, SOP, Open questions, Progress, Review. No status/owner here (those live in INDEX).
-- `progress.md` - cross-task event log (append-only): dispatch, handoff, decisions, milestones. Per-task progress goes in the task file, not here.
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
 ### Working mode
 
-1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable), skim `progress.md` tail + `notes/INDEX.md`.
-2. **Know your role.** Each role owns its files (Edit, no `>>`); `tasks/INDEX.md` is the one shared file - the coordinator creates/reviews, a worker moves only its own line to submit.
-   - **Coordinator**: maintain `state.md`, `progress.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC in the task file). Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix. Don't assign or track workers - they self-claim.
-   - **Worker**: claim one task from Open or Pending fix (no INDEX mark). Fill your task file's SOP + Progress; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
+1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`.
+2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can do both - do whichever the current step needs.
+   - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC in the task file). Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix. Don't assign or track workers - they self-claim.
+   - **Worker actions**: claim one task from Open or Pending fix (no INDEX mark). Fill your task file's SOP + Progress; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
 3. **Stuck?** Add an Open questions bullet to your task file, then move your INDEX line to Pending review. The coordinator answers inline and moves you to Pending fix.
 4. **Write discipline.** csm files orient the next agent - don't duplicate what git already records. Default to not writing; before writing, ask: \"will the next agent need this to orient, claim, or review?\" If not, skip it.
-5. **Before you stop:** leave your role's files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: one `progress.md` handoff line + reviewed INDEX lines moved.
+5. **Before you stop:** leave the files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: reviewed INDEX lines moved.
 6. **Cross-repo:** the same session name in each repo shares one `state.md` + `tasks/`. Reference the name in commits/PRs.
 7. **Legacy.** If `state.md` has `## Task` (no `## Context`), it's a pre-tasks-model session - maintain it the old way; don't force `tasks/` on old work.
 {end}",
@@ -73,7 +72,10 @@ mod tests {
         assert!(block.contains("Coordinator"));
         assert!(block.contains("Worker"));
         assert!(!block.contains("Orchestrator"));
-        // Coordinator dispatches + writes task statuses; worker plans + submits.
+        // Role is action-derived, not a fixed identity.
+        assert!(block.contains("Role follows action"));
+        assert!(!block.contains("Know your role"));
+        // Coordinator creates + reviews; worker claims + submits.
         assert!(block.contains("Create tasks in Open"));
         assert!(block.contains("approve to Done"));
         assert!(block.contains("SOP + Progress"));
@@ -82,5 +84,7 @@ mod tests {
         assert!(block.contains("## Context"));
         // The `>>`-not-Edit mandate is retired (single-writer; Edit is the path).
         assert!(!block.contains("not Edit"));
+        // progress.md is gone - board + task files absorbed it.
+        assert!(!block.contains("progress.md"));
     }
 }

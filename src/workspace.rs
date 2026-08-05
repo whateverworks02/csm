@@ -1,6 +1,6 @@
 //! Workspace directory scaffold, templates, and read helpers.
 
-use crate::store::{now_iso, session_dir, SessionMeta};
+use crate::store::{session_dir, SessionMeta};
 use anyhow::Result;
 use std::fs;
 
@@ -19,10 +19,6 @@ const SCAFFOLD: &[Scaffold] = &[
     Scaffold {
         rel: "state.md",
         content: state_content,
-    },
-    Scaffold {
-        rel: "progress.md",
-        content: progress_content,
     },
     Scaffold {
         rel: "scripts/INDEX.md",
@@ -46,10 +42,6 @@ pub fn expected_files() -> impl Iterator<Item = &'static str> {
 
 fn state_content(name: &str, _origin_pwd: &str) -> String {
     state_md_template(name)
-}
-
-fn progress_content(name: &str, origin_pwd: &str) -> String {
-    progress_md_template(name, origin_pwd)
 }
 
 fn scripts_content(name: &str, _origin_pwd: &str) -> String {
@@ -91,19 +83,6 @@ pub fn read_state_md(name: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-pub fn read_progress_md(name: &str) -> Option<String> {
-    let path = session_dir(name).ok()?.join("progress.md");
-    fs::read_to_string(path).ok()
-}
-
-/// Return the last `max_lines` lines of progress.md.
-pub fn read_progress_tail(name: &str, max_lines: usize) -> Option<String> {
-    let content = read_progress_md(name)?;
-    let lines: Vec<&str> = content.lines().collect();
-    let start = lines.len().saturating_sub(max_lines);
-    Some(lines[start..].join("\n"))
-}
-
 /// Read the raw `tasks/INDEX.md` board. `None` if the file is absent (a
 /// pre-tasks-model session, or a ghost with no workspace). Used by `csm detail`
 /// (render the full board) and the hook snapshot.
@@ -112,27 +91,22 @@ pub fn read_tasks_index_md(name: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-/// Per-status task counts parsed from `tasks/INDEX.md`. The board is the source
+/// Per-status task entries parsed from `tasks/INDEX.md`. The board is the source
 /// of truth for what's claimable (Open / Pending fix) vs awaiting review
-/// (Pending review) vs done. `csm show` renders these as a one-line status
-/// breakdown; an entry not listed in INDEX is invisible here - keep INDEX
-/// current.
+/// (Pending review) vs done. `csm show` lists the Open and Done entries (the
+/// actionable and the accomplished) as a recognition aid; entries not listed in
+/// INDEX are invisible here - keep INDEX current. Each entry is the text after
+/// the leading `- ` (e.g. `001 fix-cookie-set - wire SameSite`); the card
+/// formats it to `id slug`.
 #[derive(Default)]
 pub struct TasksBoard {
-    pub open: usize,
-    pub pending_review: usize,
-    pub pending_fix: usize,
-    pub done: usize,
+    pub open: Vec<String>,
+    pub pending_review: Vec<String>,
+    pub pending_fix: Vec<String>,
+    pub done: Vec<String>,
 }
 
-impl TasksBoard {
-    /// Total task entries across all statuses.
-    pub fn total(&self) -> usize {
-        self.open + self.pending_review + self.pending_fix + self.done
-    }
-}
-
-/// Count task entries per status in `tasks/INDEX.md` content. Layers on
+/// Collect task entries per status from `tasks/INDEX.md` content. Layers on
 /// [`crate::render::sections`] (the single `## Section` scanner shared with
 /// `csm detail` / `csm show`) so the board and the readers agree on what a
 /// section is. A task entry is a body line whose first non-space char is `-`
@@ -142,7 +116,7 @@ impl TasksBoard {
 pub fn parse_tasks_board(content: &str) -> TasksBoard {
     let mut board = TasksBoard::default();
     for section in crate::render::sections(content) {
-        let count: &mut usize = match section.title.as_str() {
+        let entries: &mut Vec<String> = match section.title.as_str() {
             "Open" => &mut board.open,
             "Pending review" => &mut board.pending_review,
             "Pending fix" => &mut board.pending_fix,
@@ -151,8 +125,9 @@ pub fn parse_tasks_board(content: &str) -> TasksBoard {
         };
         for line in section.body {
             if let Some(rest) = line.trim_start().strip_prefix('-') {
-                if !rest.trim().is_empty() {
-                    *count += 1;
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    entries.push(rest.to_string());
                 }
             }
         }
@@ -160,9 +135,9 @@ pub fn parse_tasks_board(content: &str) -> TasksBoard {
     board
 }
 
-/// Read and count tasks in `tasks/INDEX.md` for a session. `None` if the file
-/// is absent; `Some` of an all-zero board if it exists but has no task entries
-/// (a fresh scaffold). Used by `csm show` for the status-counts row.
+/// Read and parse task entries from `tasks/INDEX.md` for a session. `None` if
+/// the file is absent; `Some` of an empty board if it exists but has no entries
+/// (a fresh scaffold). Used by `csm show` to list Open/Done entries.
 pub fn read_tasks_board(name: &str) -> Option<TasksBoard> {
     read_tasks_index_md(name).map(|c| parse_tasks_board(&c))
 }
@@ -195,44 +170,6 @@ pub fn read_context_lines(name: &str, max_lines: usize) -> Vec<String> {
         .take(max_lines)
         .map(|l| l.trim().to_string())
         .collect()
-}
-
-/// Most recent progress entry, parsed into a one-line card gist.
-/// `ts`/`summary` come from the last `## <ts> - <agent> - <summary>` header.
-pub fn read_last_activity(name: &str) -> Option<LastActivity> {
-    let content = read_progress_md(name)?;
-    let lines: Vec<&str> = content.lines().collect();
-    let mut start = None;
-    for (i, line) in lines.iter().enumerate() {
-        if line.starts_with("## ") {
-            start = Some(i);
-        }
-    }
-    let start = start?;
-    let header = lines[start]
-        .strip_prefix("## ")
-        .unwrap_or(lines[start])
-        .trim();
-    let (ts, summary) = parse_progress_header(header);
-    Some(LastActivity { ts, summary })
-}
-
-/// A parsed progress entry header, for the `last` line of the show card.
-pub struct LastActivity {
-    pub ts: String,
-    pub summary: String,
-}
-
-/// Split `<ts> - <agent> - <summary>` (or fewer parts) into (ts, summary).
-/// The agent segment is dropped - the card shows when + what, not who.
-fn parse_progress_header(header: &str) -> (String, String) {
-    let parts: Vec<&str> = header.splitn(3, " - ").collect();
-    match parts.as_slice() {
-        [ts, _agent, summary] => (ts.trim().to_string(), summary.trim().to_string()),
-        [ts, summary] => (ts.trim().to_string(), summary.trim().to_string()),
-        [only] => (String::new(), only.trim().to_string()),
-        _ => (String::new(), String::new()),
-    }
 }
 
 /// List filenames under `<session-dir>/<subdir>/` (excluding INDEX.md), sorted.
@@ -271,29 +208,13 @@ fn state_md_template(name: &str) -> String {
     format!(
         r#"# {name} - state
 
-> Session one-pager. Not a log. Task detail in tasks/<id>-<slug>.md;
-> cross-task events in progress.md. (Coordinator-owned.)
+> Session one-pager. Not a log. Task detail in tasks/<id>-<slug>.md.
 
 ## Context
 <!-- What this session is + why + current focus. -->
 
 ## Key links
 <!-- Repo / docs / related sessions / transcript. -->
-"#
-    )
-}
-
-fn progress_md_template(name: &str, origin_pwd: &str) -> String {
-    let ts = now_iso();
-    format!(
-        r#"# {name} - progress log
-
-> Thin cross-task event log: dispatch / handoff / decisions / milestones.
-> Per-task progress in the task file, NOT here. Coordinator-only, append-only.
-> Entry: `## YYYY-MM-DD HH:MM - <agent> - <summary>` + 1-3 bullets.
-
-## {ts} - csm - session created
-- Workspace initialized at `{origin_pwd}`.
 "#
     )
 }
@@ -338,8 +259,7 @@ fn tasks_index_template(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_workspace, expected_files, parse_progress_header, parse_tasks_board,
-        read_context_lines, read_last_activity, read_progress_tail, read_tasks_board,
+        ensure_workspace, expected_files, parse_tasks_board, read_context_lines, read_tasks_board,
         read_tasks_index_md,
     };
     use crate::store::{session_dir, touch_session};
@@ -348,48 +268,9 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    #[test]
-    fn three_parts_drops_agent() {
-        let (ts, summary) = parse_progress_header("2026-07-30 15:04 - claude - did thing");
-        assert_eq!(ts, "2026-07-30 15:04");
-        assert_eq!(summary, "did thing");
-    }
-
-    #[test]
-    fn two_parts_ts_and_summary() {
-        let (ts, summary) = parse_progress_header("2026-07-30 15:04 - did thing");
-        assert_eq!(ts, "2026-07-30 15:04");
-        assert_eq!(summary, "did thing");
-    }
-
-    #[test]
-    fn one_part_becomes_summary() {
-        let (ts, summary) = parse_progress_header("only");
-        assert_eq!(ts, "");
-        assert_eq!(summary, "only");
-    }
-
-    #[test]
-    fn empty_header() {
-        let (ts, summary) = parse_progress_header("");
-        assert_eq!(ts, "");
-        assert_eq!(summary, "");
-    }
-
-    #[test]
-    fn segments_are_trimmed() {
-        let (ts, summary) = parse_progress_header("  ts  -  agent  -  summary  ");
-        assert_eq!(ts, "ts");
-        assert_eq!(summary, "summary");
-    }
-
-    #[test]
-    fn extra_separators_kept_in_summary() {
-        // splitn(3, " - "): only the first two splits count; the rest stays in
-        // the summary verbatim.
-        let (ts, summary) = parse_progress_header("ts - agent - a - b - c");
-        assert_eq!(ts, "ts");
-        assert_eq!(summary, "a - b - c");
+    /// Sum of entries across all statuses (test-only; prod has no use for a total).
+    fn total(b: &super::TasksBoard) -> usize {
+        b.open.len() + b.pending_review.len() + b.pending_fix.len() + b.done.len()
     }
 
     // --- workspace integration (isolated $CSM_HOME) ---
@@ -441,22 +322,7 @@ mod tests {
                 fs::read_to_string(&state_path).unwrap(),
                 "# my custom state\n"
             );
-            assert!(session_dir("ws").unwrap().join("progress.md").exists());
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn read_progress_tail_returns_last_n_lines() {
-        with_csm_home(|_dir| {
-            let meta = touch_session("ws", "/o").unwrap();
-            ensure_workspace("ws", &meta).unwrap();
-            fs::write(
-                session_dir("ws").unwrap().join("progress.md"),
-                "line1\nline2\nline3\nline4\n",
-            )
-            .unwrap();
-            assert_eq!(read_progress_tail("ws", 2).unwrap(), "line3\nline4");
+            assert!(session_dir("ws").unwrap().join("tasks/INDEX.md").exists());
         });
     }
 
@@ -510,70 +376,46 @@ mod tests {
         });
     }
 
-    #[test]
-    #[serial]
-    fn read_last_activity_picks_newest_entry() {
-        with_csm_home(|_dir| {
-            let meta = touch_session("ws", "/o").unwrap();
-            ensure_workspace("ws", &meta).unwrap();
-            fs::write(
-                session_dir("ws").unwrap().join("progress.md"),
-                "# ws - progress log\n\n> q\n\n## 2026-07-29 10:00 - csm - session created\n- init.\n\n## 2026-07-30 15:04 - claude - did thing\n- bullet\n",
-            )
-            .unwrap();
-            let act = read_last_activity("ws").expect("some activity");
-            assert_eq!(act.ts, "2026-07-30 15:04");
-            assert_eq!(act.summary, "did thing");
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn read_last_activity_none_when_no_progress() {
-        with_csm_home(|_dir| {
-            // Session in the index but no workspace dir / progress.md.
-            touch_session("ws", "/o").unwrap();
-            assert!(read_last_activity("ws").is_none());
-        });
-    }
-
     // --- tasks board ---
 
     #[test]
-    fn parse_tasks_board_counts_entries_by_status() {
+    fn parse_tasks_board_collects_entries_by_status() {
         let board = parse_tasks_board(
             "# ws - tasks board\n\n> q\n\n## Open\n- 001 refactor - slim state\n\
              - 002 prompt - review loop\n\n## Pending review\n- 003 doctor check\n\n\
              ## Pending fix\n\n## Done\n- 000 init - scaffold\n",
         );
-        assert_eq!(board.open, 2);
-        assert_eq!(board.pending_review, 1);
-        assert_eq!(board.pending_fix, 0);
-        assert_eq!(board.done, 1);
-        assert_eq!(board.total(), 4);
+        assert_eq!(board.open.len(), 2);
+        assert_eq!(board.pending_review.len(), 1);
+        assert_eq!(board.pending_fix.len(), 0);
+        assert_eq!(board.done.len(), 1);
+        assert_eq!(total(&board), 4);
+        // Entry stored is the text after `- `.
+        assert_eq!(board.open[0], "001 refactor - slim state");
+        assert_eq!(board.done[0], "000 init - scaffold");
     }
 
     #[test]
     fn parse_tasks_board_drops_comments_and_unknown_sections() {
         // The scaffold template has a commented example under Open and empty
-        // statuses - a fresh board should parse to all-zero.
+        // statuses - a fresh board should parse to all-empty.
         let fresh = "# ws - tasks board\n\n> Status board. ...\n\n## Open\n\
                      <!-- - 001 <slug> - <gist> -->\n\n## Pending review\n\n## Pending fix\n\n## Done\n";
         let board = parse_tasks_board(fresh);
-        assert_eq!(board.total(), 0);
+        assert_eq!(total(&board), 0);
         // Unknown sections are ignored, not panic.
         let with_extra = "# ws\n\n## Open\n- 001 x\n\n## Archived\n- old\n\n## Done\n- 000 y\n";
         let board = parse_tasks_board(with_extra);
-        assert_eq!(board.open, 1);
-        assert_eq!(board.done, 1);
-        assert_eq!(board.total(), 2);
+        assert_eq!(board.open.len(), 1);
+        assert_eq!(board.done.len(), 1);
+        assert_eq!(total(&board), 2);
     }
 
     #[test]
-    fn parse_tasks_board_counts_bold_entries() {
+    fn parse_tasks_board_collects_bold_entries() {
         // sections() inline-strips, so a `**bold**` gist still counts as an entry.
         let board = parse_tasks_board("## Open\n- 001 **refactor** - slim\n");
-        assert_eq!(board.open, 1);
+        assert_eq!(board.open.len(), 1);
     }
 
     #[test]
@@ -592,13 +434,13 @@ mod tests {
             let meta = touch_session("ws", "/o").unwrap();
             ensure_workspace("ws", &meta).unwrap();
             let board = read_tasks_board("ws").expect("tasks/INDEX.md is scaffolded");
-            assert_eq!(board.total(), 0);
+            assert_eq!(total(&board), 0);
         });
     }
 
     #[test]
     #[serial]
-    fn read_tasks_board_counts_real_entries() {
+    fn read_tasks_board_collects_real_entries() {
         with_csm_home(|_dir| {
             let meta = touch_session("ws", "/o").unwrap();
             ensure_workspace("ws", &meta).unwrap();
@@ -609,11 +451,11 @@ mod tests {
             )
             .unwrap();
             let board = read_tasks_board("ws").expect("parsed");
-            assert_eq!(board.open, 1);
-            assert_eq!(board.pending_review, 1);
-            assert_eq!(board.pending_fix, 1);
-            assert_eq!(board.done, 1);
-            assert_eq!(board.total(), 4);
+            assert_eq!(board.open.len(), 1);
+            assert_eq!(board.pending_review.len(), 1);
+            assert_eq!(board.pending_fix.len(), 1);
+            assert_eq!(board.done.len(), 1);
+            assert_eq!(total(&board), 4);
         });
     }
 }
