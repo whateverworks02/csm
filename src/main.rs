@@ -19,8 +19,8 @@ mod doctor;
 mod gc;
 mod hook;
 mod inject;
+mod markdown;
 mod prompt;
-mod render;
 mod store;
 #[cfg(test)]
 mod test_support;
@@ -495,7 +495,7 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     // back to a legacy `## Task` section for pre-tasks-model sessions.)
     let context_lines: Vec<String> = workspace::read_context_lines(&name, 5)
         .into_iter()
-        .map(|l| render::truncate(&l, 100))
+        .map(|l| markdown::truncate(&l, 100))
         .collect();
     card_multiline_row("context", &context_lines);
 
@@ -579,7 +579,7 @@ fn cmd_detail(name: Option<String>) -> Result<()> {
         }
     };
 
-    print_sections(render::sections(&content));
+    print_sections(markdown::sections(&content));
 
     // The task board - the operational center. The deep read includes it so an
     // orienting coordinator/worker sees the full status board, not just the
@@ -588,7 +588,7 @@ fn cmd_detail(name: Option<String>) -> Result<()> {
     if let Some(board_content) = workspace::read_tasks_index_md(&name) {
         println!("{}", ui::paint(ui::BOLD, "tasks"));
         println!();
-        print_sections(render::sections(&board_content));
+        print_sections(markdown::sections(&board_content));
     }
     Ok(())
 }
@@ -597,7 +597,7 @@ fn cmd_detail(name: Option<String>) -> Result<()> {
 /// followed by a blank line; an empty body shows a dim `(none)`. Shared by
 /// `csm detail` for state.md and the tasks/INDEX.md board so the two render
 /// identically.
-fn print_sections(sections: Vec<render::Section>) {
+fn print_sections(sections: Vec<markdown::Section>) {
     for section in sections {
         println!("{}", ui::paint(ui::BOLD, &section.title));
         if section.body.is_empty() {

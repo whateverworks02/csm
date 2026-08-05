@@ -71,6 +71,23 @@ csm my-task --agent codex   # same session, launch codex
 
 > codex: after `csm init`, run `/hooks` in your first codex session and trust the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted, csm revives the workspace on `/clear` and compaction.
 
+## Commands
+
+| Command | What it does |
+|---------|-------------|
+| `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`) |
+| `csm` | Pick a session whose origin is the current directory |
+| `csm list` | List all sessions |
+| `csm show [name]` | Compact card: context, open/done tasks, scripts, notes |
+| `csm detail [name]` | Full `state.md` + task board render |
+| `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
+| `csm rename <old> <new>` | Rename and re-home to the current directory |
+| `csm rm <name>` | Delete a session and its workspace |
+| `csm gc [--older-than N]` | Garbage-collect unpinned sessions |
+| `csm doctor [--fix]` | Diagnose and repair consistency |
+
+`show` and `detail` default to `$CSM_SESSION`, else open a picker. `csm init` (run by the installer) installs the hook + prompt - rerun it after upgrading csm.
+
 ## License
 
 MIT
