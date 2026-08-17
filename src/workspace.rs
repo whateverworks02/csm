@@ -45,11 +45,21 @@ fn state_content(name: &str, _origin_pwd: &str) -> String {
 }
 
 fn scripts_content(name: &str, _origin_pwd: &str) -> String {
-    index_template(name, "scripts", "shared scripts")
+    index_template(
+        name,
+        "scripts",
+        "shared scripts",
+        "`### <name>` then purpose / args / example",
+    )
 }
 
 fn notes_content(name: &str, _origin_pwd: &str) -> String {
-    index_template(name, "notes", "focused deep-dive articles")
+    index_template(
+        name,
+        "notes",
+        "focused deep-dive articles",
+        "`### <slug>` then a one-line gist",
+    )
 }
 
 fn tasks_content(name: &str, _origin_pwd: &str) -> String {
@@ -208,8 +218,6 @@ fn state_md_template(name: &str) -> String {
     format!(
         r#"# {name} - state
 
-> Session one-pager. Not a log. Task detail in tasks/<id>-<slug>.md.
-
 ## Context
 <!-- What this session is + why + current focus. -->
 
@@ -219,12 +227,12 @@ fn state_md_template(name: &str) -> String {
     )
 }
 
-fn index_template(name: &str, subdir: &str, description: &str) -> String {
+fn index_template(name: &str, subdir: &str, description: &str, entry_format: &str) -> String {
     format!(
         r#"# {name} - {subdir} registry
 
 > Registry of {description} under {subdir}/. Read this before writing a new one.
-> Entry format: `### <slug>` then a one-line gist.
+> Entry format: {entry_format}.
 
 <!-- Add entries as you add {subdir}. -->
 "#
@@ -234,15 +242,14 @@ fn index_template(name: &str, subdir: &str, description: &str) -> String {
 /// The task board. Sectioned by status (Open / Pending review / Pending fix /
 /// Done) so an orienting agent reads only the actionable sections (Open and
 /// Pending fix are worker-claimable; Pending review awaits the coordinator) and
-/// skims Done. No owner column - the coordinator doesn't track workers.
-/// Coordinator-owned; updated on create / submit / review only.
+/// skims Done. The header carries only entry format + task-file pointer - the
+/// claim/submit/review flow lives in the CLAUDE.md prompt, and this file is
+/// injected verbatim on every launch (no restatement).
 fn tasks_index_template(name: &str) -> String {
     format!(
         r#"# {name} - tasks board
 
-> Status board. Each task: tasks/<id>-<slug>.md (scope+AC+SOP+open-questions+
-> progress+Review). Status = section. Worker claims Open/Pending fix, submits
-> to Pending review; coordinator reviews -> Pending fix or Done.
+> Each task: tasks/<id>-<slug>.md (Scope/AC/SOP/Open questions/Progress/Review). Status = section.
 
 ## Open
 <!-- - 001 <slug> - <gist> -->
