@@ -242,14 +242,15 @@ fn index_template(name: &str, subdir: &str, description: &str, entry_format: &st
 /// The task board. Sectioned by status (Open / Pending review / Pending fix /
 /// Done) so an orienting agent reads only the actionable sections (Open and
 /// Pending fix are worker-claimable; Pending review awaits the coordinator) and
-/// skims Done. The header carries only entry format + task-file pointer - the
-/// claim/submit/review flow lives in the CLAUDE.md prompt, and this file is
-/// injected verbatim on every launch (no restatement).
+/// skims Done. The header carries only the task-file pointer + status rule -
+/// the section list and claim/submit/review flow live in the CLAUDE.md
+/// prompt, and this file is injected verbatim on every launch (no
+/// restatement).
 fn tasks_index_template(name: &str) -> String {
     format!(
         r#"# {name} - tasks board
 
-> Each task: tasks/<id>-<slug>.md (Scope/AC/SOP/Open questions/Progress/Review). Status = section.
+> Each task: tasks/<id>-<slug>.md. Status = section.
 
 ## Open
 <!-- - 001 <slug> - <gist> -->
