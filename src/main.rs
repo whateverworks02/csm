@@ -21,6 +21,7 @@ mod hook;
 mod inject;
 mod markdown;
 mod prompt;
+mod skills;
 mod store;
 #[cfg(test)]
 mod test_support;
@@ -102,9 +103,10 @@ enum Cmd {
         yes: bool,
     },
 
-    /// Install agent wiring: the SessionStart hook into ~/.claude/settings.json
-    /// and ~/.codex/hooks.json, and the csm working-mode prompt into
-    /// ~/.claude/CLAUDE.md, ~/.pi/agent/CLAUDE.md, and ~/.codex/AGENTS.md.
+    /// Install agent wiring: SessionStart hooks (~/.claude/settings.json,
+    /// ~/.codex/hooks.json), the csm working-mode prompt (~/.claude/CLAUDE.md,
+    /// ~/.pi/agent/CLAUDE.md, ~/.codex/AGENTS.md), and the csm-plan skill
+    /// (~/.claude/skills/csm-plan/SKILL.md + ~/.csm/skills/plan.md).
     Init,
 
     /// Print the version.

@@ -15,6 +15,7 @@
 //! - Wiring is never mutated here (only diagnosed); repair is `csm init`'s job.
 
 use crate::inject;
+use crate::skills;
 use crate::store;
 use crate::ui;
 use crate::workspace;
@@ -278,6 +279,27 @@ fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
     wiring(label, if ok { Status::Ok } else { Status::Error }, detail)
 }
 
+/// Wiring check: is the csm-plan skill deployed at the Claude surface and
+/// current (`skills::skill_current` - the predicate `skills::deploy` writes
+/// against, so install and diagnose cannot drift)? A stale copy after an
+/// upgrade is a finding, not just a missing one. The vendor-neutral
+/// `~/.csm/skills/plan.md` deploys through the same code path, so this one
+/// surface is the canary. Report-only.
+fn check_skill(path: Option<PathBuf>) -> Check {
+    let (ok, detail) = match path {
+        Some(p) if skills::skill_current(&p) => (true, ui::abbrev_path(&p)),
+        // Present but not the const: stale (post-upgrade, user-edited) or
+        // unreadable (permissions) - either way `csm init` is the remedy.
+        Some(p) if p.exists() => (false, format!("stale or unreadable; {INIT_HINT}")),
+        _ => (false, INIT_HINT.into()),
+    };
+    wiring(
+        "csm-plan skill",
+        if ok { Status::Ok } else { Status::Error },
+        detail,
+    )
+}
+
 fn wiring_checks(out: &mut Vec<Check>) {
     // SessionStart hook in ~/.claude/settings.json.
     out.push(check_hook(
@@ -288,6 +310,9 @@ fn wiring_checks(out: &mut Vec<Check>) {
 
     // csm prompt block in ~/.claude/CLAUDE.md.
     out.push(check_prompt("claude prompt", inject::claude_md_path().ok()));
+
+    // csm-plan skill at the Claude surface (missing or stale -> `csm init`).
+    out.push(check_skill(skills::claude_skill_path().ok()));
 
     // pi prompt block - only if pi is installed (~/.pi/agent exists).
     if inject::pi_dir().ok().is_some_and(|d| d.exists()) {
@@ -526,6 +551,28 @@ mod tests {
         let mut out = Vec::new();
         consistency_checks(&mut out);
         out
+    }
+
+    #[test]
+    fn skill_check_flags_missing_stale_and_current() {
+        // check_skill is pure over a path, so no env isolation needed.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("SKILL.md");
+        // Missing.
+        assert!(matches!(
+            check_skill(Some(path.clone())).status,
+            Status::Error
+        ));
+        // Stale (post-upgrade or user-edited copy).
+        fs::write(&path, "old version").unwrap();
+        let stale = check_skill(Some(path.clone()));
+        assert!(matches!(stale.status, Status::Error));
+        assert!(stale.detail.contains("stale"));
+        // Current.
+        fs::write(&path, skills::PLAN_SKILL_MD).unwrap();
+        assert!(matches!(check_skill(Some(path.clone())).status, Status::Ok));
+        // Unresolvable path.
+        assert!(matches!(check_skill(None).status, Status::Error));
     }
 
     #[test]
