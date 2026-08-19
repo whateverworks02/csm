@@ -279,22 +279,22 @@ fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
     wiring(label, if ok { Status::Ok } else { Status::Error }, detail)
 }
 
-/// Wiring check: is the csm-plan skill deployed at the Claude surface and
-/// current (`skills::skill_current` - the predicate `skills::deploy` writes
-/// against, so install and diagnose cannot drift)? A stale copy after an
-/// upgrade is a finding, not just a missing one. The vendor-neutral
-/// `~/.csm/skills/plan.md` deploys through the same code path, so this one
-/// surface is the canary. Report-only.
-fn check_skill(path: Option<PathBuf>) -> Check {
+/// Wiring check: is the skill deployed at the Claude surface and current
+/// (`skills::skill_current` - the predicate `skills::deploy` writes against, so
+/// install and diagnose cannot drift)? A stale copy after an upgrade is a
+/// finding, not just a missing one. The vendor-neutral `~/.csm/skills/<file>`
+/// deploys through the same code path, so the Claude surface is the canary.
+/// Report-only.
+fn check_skill(skill: &skills::SkillSpec, path: Option<PathBuf>) -> Check {
     let (ok, detail) = match path {
-        Some(p) if skills::skill_current(&p) => (true, ui::abbrev_path(&p)),
+        Some(p) if skills::skill_current(&p, skill.md) => (true, ui::abbrev_path(&p)),
         // Present but not the const: stale (post-upgrade, user-edited) or
         // unreadable (permissions) - either way `csm init` is the remedy.
         Some(p) if p.exists() => (false, format!("stale or unreadable; {INIT_HINT}")),
         _ => (false, INIT_HINT.into()),
     };
     wiring(
-        "csm-plan skill",
+        &format!("{} skill", skill.id),
         if ok { Status::Ok } else { Status::Error },
         detail,
     )
@@ -311,8 +311,10 @@ fn wiring_checks(out: &mut Vec<Check>) {
     // csm prompt block in ~/.claude/CLAUDE.md.
     out.push(check_prompt("claude prompt", inject::claude_md_path().ok()));
 
-    // csm-plan skill at the Claude surface (missing or stale -> `csm init`).
-    out.push(check_skill(skills::claude_skill_path().ok()));
+    // csm skills at the Claude surface (missing or stale -> `csm init`).
+    for skill in skills::SKILLS {
+        out.push(check_skill(skill, skills::claude_skill_path(skill.id).ok()));
+    }
 
     // pi prompt block - only if pi is installed (~/.pi/agent exists).
     if inject::pi_dir().ok().is_some_and(|d| d.exists()) {
@@ -555,24 +557,28 @@ mod tests {
 
     #[test]
     fn skill_check_flags_missing_stale_and_current() {
-        // check_skill is pure over a path, so no env isolation needed.
+        // check_skill is pure over a spec + path, so no env isolation needed.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("SKILL.md");
+        let scout = &skills::SKILLS[1];
         // Missing.
         assert!(matches!(
-            check_skill(Some(path.clone())).status,
+            check_skill(scout, Some(path.clone())).status,
             Status::Error
         ));
         // Stale (post-upgrade or user-edited copy).
         fs::write(&path, "old version").unwrap();
-        let stale = check_skill(Some(path.clone()));
+        let stale = check_skill(scout, Some(path.clone()));
         assert!(matches!(stale.status, Status::Error));
         assert!(stale.detail.contains("stale"));
         // Current.
-        fs::write(&path, skills::PLAN_SKILL_MD).unwrap();
-        assert!(matches!(check_skill(Some(path.clone())).status, Status::Ok));
+        fs::write(&path, skills::SCOUT_SKILL_MD).unwrap();
+        assert!(matches!(
+            check_skill(scout, Some(path.clone())).status,
+            Status::Ok
+        ));
         // Unresolvable path.
-        assert!(matches!(check_skill(None).status, Status::Error));
+        assert!(matches!(check_skill(scout, None).status, Status::Error));
     }
 
     #[test]
