@@ -294,7 +294,7 @@ fn check_skill(skill: &skills::SkillSpec, path: Option<PathBuf>) -> Check {
         _ => (false, INIT_HINT.into()),
     };
     wiring(
-        &format!("{} skill", skill.id),
+        &skill.label(),
         if ok { Status::Ok } else { Status::Error },
         detail,
     )
@@ -560,7 +560,10 @@ mod tests {
         // check_skill is pure over a spec + path, so no env isolation needed.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("SKILL.md");
-        let scout = &skills::SKILLS[1];
+        let scout = skills::SKILLS
+            .iter()
+            .find(|s| s.id == "csm-scout")
+            .expect("csm-scout in SKILLS");
         // Missing.
         assert!(matches!(
             check_skill(scout, Some(path.clone())).status,

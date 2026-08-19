@@ -87,21 +87,28 @@ pub struct SkillSpec {
     /// slash-command name (`/csm-plan`).
     pub id: &'static str,
     /// Vendor-neutral filename under `~/.csm/skills/`.
-    pub file: &'static str,
+    pub vendor_file: &'static str,
     /// The skill body, frontmatter included.
     pub md: &'static str,
+}
+
+impl SkillSpec {
+    /// Status-line label, shared by [`deploy`] and `doctor`'s check.
+    pub fn label(&self) -> String {
+        format!("{} skill", self.id)
+    }
 }
 
 /// Every csm-shipped skill - one deploy code path, N skills.
 pub const SKILLS: &[SkillSpec] = &[
     SkillSpec {
         id: "csm-plan",
-        file: "plan.md",
+        vendor_file: "plan.md",
         md: PLAN_SKILL_MD,
     },
     SkillSpec {
         id: "csm-scout",
-        file: "scout.md",
+        vendor_file: "scout.md",
         md: SCOUT_SKILL_MD,
     },
 ];
@@ -111,9 +118,9 @@ pub fn claude_skill_path(id: &str) -> Result<PathBuf> {
     Ok(claude_dir()?.join("skills").join(id).join("SKILL.md"))
 }
 
-/// Vendor-neutral render target: `~/.csm/skills/<file>`.
-pub fn vendor_neutral_path(file: &str) -> Result<PathBuf> {
-    Ok(store::csm_home()?.join("skills").join(file))
+/// Vendor-neutral render target: `~/.csm/skills/<vendor_file>`.
+pub fn vendor_neutral_path(vendor_file: &str) -> Result<PathBuf> {
+    Ok(store::csm_home()?.join("skills").join(vendor_file))
 }
 
 /// Read-only check: is the skill at `path` deployed and current (content ==
@@ -145,29 +152,26 @@ fn deploy(path: &Path, md: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Deploy every skill's Claude surface (`ClaudeAgent::install` calls this).
-pub fn install_claude() -> Result<()> {
+/// Deploy every skill to the surface `path_for` picks - the one install code
+/// path both surfaces call. A failed deploy aborts the pass with the rest
+/// undeployed; the converge-to-const contract makes the partial state
+/// self-healing on the next `csm init`.
+fn install_all_at(path_for: impl Fn(&SkillSpec) -> Result<PathBuf>) -> Result<()> {
     for skill in SKILLS {
-        deploy(
-            &claude_skill_path(skill.id)?,
-            skill.md,
-            &format!("{} skill", skill.id),
-        )?;
+        deploy(&path_for(skill)?, skill.md, &skill.label())?;
     }
     Ok(())
+}
+
+/// Deploy every skill's Claude surface (`ClaudeAgent::install` calls this).
+pub fn install_claude() -> Result<()> {
+    install_all_at(|skill| claude_skill_path(skill.id))
 }
 
 /// Deploy every skill's vendor-neutral home - the human-readable copy
 /// (`agent::install_all` calls this once per `csm init`).
 pub fn install_vendor_neutral() -> Result<()> {
-    for skill in SKILLS {
-        deploy(
-            &vendor_neutral_path(skill.file)?,
-            skill.md,
-            &format!("{} skill", skill.id),
-        )?;
-    }
-    Ok(())
+    install_all_at(|skill| vendor_neutral_path(skill.vendor_file))
 }
 
 #[cfg(test)]
