@@ -40,6 +40,10 @@ Roles are action-derived, not assigned: creating or reviewing a task is a coordi
 
 `state.md` and `tasks/INDEX.md` are the orientation surface - injected into the agent on launch. Per-task files carry the detail; `notes/` and `scripts/` carry reusable knowledge.
 
+## The csm-plan skill
+
+`csm init` ships one skill: **csm-plan**, the authoring discipline for the planning pass - grill the human in one batch (every question names the decision, the options, and what breaks under each), write the `state.md` one-pager, decompose into tasks whose SOPs a weak executor can run (every step ends on a completion criterion the executor itself can check). Claude gets it as a real skill - `/csm-plan`, auto-triggered when creating tasks for a mission - and a vendor-neutral copy lives at `~/.csm/skills/plan.md`. Update loop is the same as the prompt: upgrade csm, rerun `csm init`.
+
 ## Install
 
 **macOS (Apple Silicon):**
@@ -48,7 +52,7 @@ Roles are action-derived, not assigned: creating or reviewing a task is a coordi
 curl -fsSL https://raw.githubusercontent.com/whateverworks02/csm/main/install.sh | bash
 ```
 
-The installer puts the binary in `~/.local/bin` and runs `csm init` (the hook + the prompt) and `csm doctor` for you. Add `~/.local/bin` to `PATH` if it says so, then `csm <name>`.
+The installer puts the binary in `~/.local/bin` and runs `csm init` (the hook, the prompt, and the csm-plan skill) and `csm doctor` for you. Add `~/.local/bin` to `PATH` if it says so, then `csm <name>`.
 
 **From source** (any platform with Rust):
 
@@ -85,7 +89,7 @@ csm my-task --agent codex   # same session, launch codex
 | `csm gc [--older-than N]` | Garbage-collect unpinned sessions |
 | `csm doctor [--fix]` | Diagnose and repair consistency |
 
-`show` and `detail` default to `$CSM_SESSION`, else open a picker. `csm init` (run by the installer) installs the hook + prompt - rerun it after upgrading csm.
+`show` and `detail` default to `$CSM_SESSION`, else open a picker. `csm init` (run by the installer) installs the hook, the prompt, and the csm-plan skill - rerun it after upgrading csm.
 
 ## License
 
