@@ -88,6 +88,7 @@ csm my-task --agent codex   # same session, launch codex
 | `csm list` | List all sessions |
 | `csm show [name]` | Compact card: context, open/done tasks, scripts, notes |
 | `csm detail [name]` | Full `state.md` + task board render |
+| `csm init` | (Re)install the hook, the prompt, and the csm skills - rerun after upgrading |
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
 | `csm rename <old> <new>` | Rename and re-home to the current directory |
 | `csm rm <name>` | Delete a session and its workspace |
