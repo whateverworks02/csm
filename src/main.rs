@@ -105,8 +105,8 @@ enum Cmd {
 
     /// Install agent wiring: SessionStart hooks (~/.claude/settings.json,
     /// ~/.codex/hooks.json), the csm working-mode prompt (~/.claude/CLAUDE.md,
-    /// ~/.pi/agent/CLAUDE.md, ~/.codex/AGENTS.md), and the csm-plan skill
-    /// (~/.claude/skills/csm-plan/SKILL.md + ~/.csm/skills/plan.md).
+    /// ~/.pi/agent/CLAUDE.md, ~/.codex/AGENTS.md), and the csm skills
+    /// (~/.claude/skills/csm-*/SKILL.md + ~/.csm/skills/*.md).
     Init,
 
     /// Print the version.

@@ -61,8 +61,8 @@ pub fn agent_for(id: &str) -> Result<Box<dyn Agent>> {
 
 /// Install global wiring for every known agent. Idempotent. Used by `csm init`
 /// so one command sets up every supported agent. Also deploys the
-/// vendor-neutral csm-plan skill home (`skills::install_vendor_neutral`) - the
-/// human-readable copy, agent-independent so it deploys once.
+/// vendor-neutral skill homes (`skills::install_vendor_neutral`) - the
+/// human-readable copies, agent-independent so they deploy once.
 pub fn install_all() -> Result<()> {
     for id in KNOWN_AGENTS {
         agent_for(id)?.install()?;
@@ -92,7 +92,7 @@ impl Agent for ClaudeAgent {
 
     fn install(&self) -> Result<()> {
         inject::install_claude()?;
-        // Claude reaches the csm-plan skill as a real skill (slash command +
+        // Claude reaches the csm skills as real skills (slash command +
         // auto-trigger) - no pointer line in its block.
         skills::install_claude()
     }
