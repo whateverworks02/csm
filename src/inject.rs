@@ -85,6 +85,30 @@ pub fn codex_hooks_path() -> Result<PathBuf> {
     Ok(codex_dir()?.join("hooks.json"))
 }
 
+/// Path to the global user opencode config dir (`~/.config/opencode`),
+/// honoring `$XDG_CONFIG_HOME` - opencode resolves its config dir through XDG
+/// (`XDG_CONFIG_HOME=/x opencode debug paths` reports `/x/opencode`). Not to
+/// be confused with `$OPENCODE_CONFIG_DIR`: that adds an extra per-directory
+/// config source, it does not relocate this dir.
+pub fn opencode_dir() -> Result<PathBuf> {
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
+        if !x.is_empty() {
+            return Ok(PathBuf::from(x).join("opencode"));
+        }
+    }
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".config").join("opencode"))
+}
+
+/// opencode's global instructions file: `<config dir>/AGENTS.md` - the analog
+/// of codex's `~/.codex/AGENTS.md`. No precedence dance unlike pi/codex: a
+/// `CLAUDE.md` at the config dir is not loaded (verified - a marker there is
+/// unseen, the same content in `AGENTS.md` is), so `AGENTS.md` is simply the
+/// file.
+pub fn opencode_agents_target() -> Result<PathBuf> {
+    Ok(opencode_dir()?.join("AGENTS.md"))
+}
+
 /// Inject (or refresh) the csm block into `path`. Creates the file and parent
 /// dirs if missing. Idempotent. Returns (path, modified).
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
@@ -251,6 +275,18 @@ pub fn install_codex() -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Install opencode's state-injection wiring: the csm working-mode block in
+/// `~/.config/opencode/AGENTS.md`. No hook file - opencode has no
+/// SessionStart-hook envelope csm can reuse, so the per-session snapshot is
+/// injected at launch instead (`OpenCodeAgent::launch` in `agent.rs` passes it
+/// via `$OPENCODE_CONFIG_CONTENT`). Idempotent. This is
+/// `OpenCodeAgent::install`.
+pub fn install_opencode() -> Result<()> {
+    std::fs::create_dir_all(opencode_dir()?)?;
+    inject_prompt_block(&opencode_agents_target()?)?;
     Ok(())
 }
 
@@ -633,6 +669,38 @@ mod tests {
         // (AGENTS.* > CLAUDE.*) is covered above and is FS-independent.
     }
 
+    mod opencode_dir {
+        use super::*;
+        use crate::test_support::{with_env, with_home, without_env};
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn honors_xdg_config_home() {
+            with_home(|home| {
+                with_env("XDG_CONFIG_HOME", "/custom/xdg", || {
+                    assert_eq!(
+                        opencode_dir().unwrap(),
+                        PathBuf::from("/custom/xdg").join("opencode")
+                    );
+                });
+                // An empty override falls back to ~/.config (like $CODEX_HOME).
+                with_env("XDG_CONFIG_HOME", "", || {
+                    assert_eq!(
+                        opencode_dir().unwrap(),
+                        home.join(".config").join("opencode")
+                    );
+                });
+                without_env("XDG_CONFIG_HOME", || {
+                    assert_eq!(
+                        opencode_dir().unwrap(),
+                        home.join(".config").join("opencode")
+                    );
+                });
+            });
+        }
+    }
+
     mod codex_dir {
         use super::*;
         use crate::test_support::{with_env, with_home, without_env};
@@ -733,6 +801,44 @@ mod tests {
                 assert_eq!(m_after.matches(CSM_MARK_BEGIN).count(), 1);
                 let root: serde_json::Value = serde_json::from_str(&h_after).unwrap();
                 assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+            });
+        }
+    }
+
+    mod install_opencode {
+        use super::*;
+        use crate::test_support::with_isolated_home;
+        use serial_test::serial;
+        use std::fs;
+
+        #[test]
+        #[serial]
+        fn writes_block() {
+            with_isolated_home(|home| {
+                install_opencode().unwrap();
+                let md =
+                    fs::read_to_string(home.join(".config").join("opencode").join("AGENTS.md"))
+                        .unwrap();
+                assert!(md.contains(CSM_MARK_BEGIN));
+                assert!(md.contains(CSM_MARK_END));
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn idempotent_no_duplicate_block() {
+            with_isolated_home(|home| {
+                install_opencode().unwrap();
+                let before =
+                    fs::read_to_string(home.join(".config").join("opencode").join("AGENTS.md"))
+                        .unwrap();
+                // Second run must not duplicate the block.
+                install_opencode().unwrap();
+                let after =
+                    fs::read_to_string(home.join(".config").join("opencode").join("AGENTS.md"))
+                        .unwrap();
+                assert_eq!(after, before);
+                assert_eq!(after.matches(CSM_MARK_BEGIN).count(), 1);
             });
         }
     }

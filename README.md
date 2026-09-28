@@ -47,7 +47,7 @@ Roles are action-derived, not assigned: creating or reviewing a task is a coordi
 - **csm-plan** (architect pass): grill the human in one batch (every question names the decision, the options, and what breaks under each), write the `state.md` one-pager, decompose into tasks whose SOPs a weak executor can run (every step ends on a completion criterion the executor itself can check).
 - **csm-scout** (scout pass): explore to answer questions, not to tour files - one note per question with `path:line` evidence, claims marked read vs inferred, unknowns listed as `open:` (they are grill material, not failure), options reported but never picked.
 
-Claude gets both as real skills - `/csm-plan`, `/csm-scout`, auto-triggered - and vendor-neutral copies live at `~/.csm/skills/plan.md` and `~/.csm/skills/scout.md`. Update loop is the same as the prompt: upgrade csm, rerun `csm init`.
+Claude gets both as real skills - `/csm-plan`, `/csm-scout`, auto-triggered - and opencode auto-loads that same `~/.claude/skills/` directory as external skills, so it reads them with no separate deployment. Vendor-neutral copies live at `~/.csm/skills/plan.md` and `~/.csm/skills/scout.md`. Update loop is the same as the prompt: upgrade csm, rerun `csm init`.
 
 ## Install
 
@@ -75,6 +75,7 @@ cd ~/proj/my-task
 csm my-task                 # create/resume "my-task", launch claude (default)
 csm my-task --agent pi      # same session, launch pi
 csm my-task --agent codex   # same session, launch codex
+csm my-task --agent opencode # same session, launch opencode
 ```
 
 > codex: after `csm init`, run `/hooks` in your first codex session and trust the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted, csm revives the workspace on `/clear` and compaction.
@@ -83,7 +84,7 @@ csm my-task --agent codex   # same session, launch codex
 
 | Command | What it does |
 |---------|-------------|
-| `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`) |
+| `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`) |
 | `csm` | Pick a session whose origin is the current directory |
 | `csm list` | List all sessions |
 | `csm show [name]` | Compact card: context, open/done tasks, scripts, notes |

@@ -19,8 +19,10 @@
 //!   readable by any agent or human that goes looking.
 //!
 //! pi and codex get nothing: they have no skill mechanism, and a pointer line
-//! in their always-loaded prompt block was judged not worth its context load -
-//! the skills are Claude-reachable only for now.
+//! in their always-loaded prompt block was judged not worth its context load.
+//! opencode needs nothing either, for the opposite reason: it auto-loads
+//! `~/.claude/skills/` as external skills (verified via `opencode debug skill`),
+//! so it reads the Claude-deployed copies as-is.
 
 use crate::inject::claude_dir;
 use crate::store;

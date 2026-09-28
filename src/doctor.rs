@@ -279,6 +279,34 @@ fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
     wiring(label, if ok { Status::Ok } else { Status::Error }, detail)
 }
 
+/// Wiring check for a launch-injection agent's prompt block - like
+/// [`check_prompt`] but conditional on the agent being installed (`dir`
+/// exists, the codex pattern) and Warn-on-miss. Used by the launch-injection
+/// agents (pi, opencode): their per-session state is injected at launch, so a
+/// missing block degrades every new launch (the working-mode prompt is absent)
+/// rather than silently breaking a hook mid-work. Returns `None` (no row) when
+/// the agent isn't installed. `target` resolves the file to check (pi's
+/// candidate precedence makes it fallible). Report-only.
+fn check_prompt_if_installed(
+    label: &str,
+    dir: Result<PathBuf>,
+    target: Result<PathBuf>,
+) -> Option<Check> {
+    if !dir.is_ok_and(|d| d.exists()) {
+        return None;
+    }
+    let (ok, detail) = match target {
+        Ok(p) if inject::prompt_block_present(&p) => (true, ui::abbrev_path(&p)),
+        Ok(p) => (false, format!("{INIT_HINT} ({})", ui::abbrev_path(&p))),
+        Err(_) => (false, INIT_HINT.into()),
+    };
+    Some(wiring(
+        label,
+        if ok { Status::Ok } else { Status::Warn },
+        detail,
+    ))
+}
+
 /// Wiring check: is the skill deployed at the Claude surface and current
 /// (`skills::skill_current` - the predicate `skills::deploy` writes against, so
 /// install and diagnose cannot drift)? A stale copy after an upgrade is a
@@ -316,18 +344,12 @@ fn wiring_checks(out: &mut Vec<Check>) {
         out.push(check_skill(skill, skills::claude_skill_path(skill.id).ok()));
     }
 
-    // pi prompt block - only if pi is installed (~/.pi/agent exists).
-    if inject::pi_dir().ok().is_some_and(|d| d.exists()) {
-        let (pi_ok, detail) = match inject::pi_context_target() {
-            Ok(p) if inject::prompt_block_present(&p) => (true, ui::abbrev_path(&p)),
-            Ok(p) => (false, format!("{INIT_HINT} ({})", ui::abbrev_path(&p))),
-            Err(_) => (false, INIT_HINT.into()),
-        };
-        out.push(wiring(
-            "pi prompt",
-            if pi_ok { Status::Ok } else { Status::Warn },
-            detail,
-        ));
+    // pi prompt block - only if pi is installed (~/.pi/agent exists);
+    // launch-time injection, so the Warn-on-miss variant.
+    if let Some(check) =
+        check_prompt_if_installed("pi prompt", inject::pi_dir(), inject::pi_context_target())
+    {
+        out.push(check);
     }
 
     // codex SessionStart hook + prompt - only if codex is installed
@@ -343,6 +365,17 @@ fn wiring_checks(out: &mut Vec<Check>) {
             "codex prompt",
             inject::codex_agents_target().ok(),
         ));
+    }
+
+    // opencode prompt - only if opencode is installed (~/.config/opencode
+    // exists). Launch-time injection like pi (no hook file to check), so the
+    // same Warn-on-miss variant.
+    if let Some(check) = check_prompt_if_installed(
+        "opencode prompt",
+        inject::opencode_dir(),
+        inject::opencode_agents_target(),
+    ) {
+        out.push(check);
     }
 
     // csm on PATH so the hook command `csm hook` resolves.
