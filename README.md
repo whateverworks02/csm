@@ -24,7 +24,7 @@ Each session is a directory at `~/.csm/sessions/<name>/`:
 ```
 
 - **`state.md`** - the session one-pager. Sections: `Context` (what this session is and why), `Key links` (repo, docs, related sessions). Read on every launch to recall what the session is about.
-- **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done.
+- **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done. `Done` means the local loop closed - executed, reviewed locally, PR raised if any; CI/approval/merge are outside csm. Within a section, line order = execution order: ids are stable handles, so replanning re-slots lines (reorder/insert/split/drop) instead of renumbering, and the board - not chat - carries the plan.
 - **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
 - **`notes/`** - focused deep-dive articles that outlive a single task; `notes/INDEX.md` is the registry.
 - **`scripts/`** - shared utility scripts; `scripts/INDEX.md` is the registry.
@@ -33,7 +33,7 @@ Each session is a directory at `~/.csm/sessions/<name>/`:
 
 Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can do both in a session.
 
-1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add a line under `Open` in `tasks/INDEX.md`.
+1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add its line under `Open` at its execution position (next free id, wherever it slots).
 2. **Claim & execute** (worker): pick from `Open` or `Pending fix`; execute the `SOP`, recording outcomes in `Progress`.
 3. **Submit** (worker): done or stuck - if stuck, add an `Open questions` bullet first; move the INDEX line to `Pending review`.
 4. **Review** (coordinator): approve -> `Done`; or write `Review` + answer `Open questions` -> `Pending fix`.
