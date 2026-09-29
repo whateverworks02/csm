@@ -8,7 +8,10 @@
 //!      auto-injects the active session's `state.md`.
 //!
 //! Launching: `csm <name>` sets up / refreshes the session, then launches the
-//! agent via a per-agent adapter (`--agent`, default `claude`). The Claude
+//! agent via a per-agent adapter (`--agent`, default `claude`). Without a
+//! name, csm offers a picker over sessions whose origin is the current
+//! directory - bare `csm` or `csm -a <agent>` (which is how csx/cso/csp-style
+//! shell shortcuts get the picker when called bare). The Claude
 //! adapter runs `claude` with `CSM_SESSION=<name>`; on `/clear`, Claude Code
 //! fires SessionStart again (source=clear), the hook reads `CSM_SESSION` (still
 //! set, same process) and re-injects `state.md` - reviving the workspace memory.
@@ -37,9 +40,15 @@ use std::io::Write;
     name = "csm",
     version,
     about = "Workspace memory for coding agents (cross-time, cross-repo)",
-    after_help = "Run `csm <name>` to start a session and launch Claude Code."
+    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks one for this directory."
 )]
 struct Cli {
+    /// Agent to launch (claude, pi, codex, opencode; default claude). May lead
+    /// (`csm -a pi <name>`) or trail (`csm <name> -a pi`); without a session
+    /// name, `csm -a <agent>` opens the picker for this directory.
+    #[arg(short = 'a', long = "agent", value_name = "AGENT")]
+    agent: Option<String>,
+
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -118,7 +127,8 @@ enum Cmd {
     #[command(hide = true)]
     Hook,
 
-    /// `csm <name>`: start (or resume) a session by name and launch Claude Code.
+    /// `csm [<name>] [--agent <x>]`: start (or resume) a session by name and
+    /// launch the agent; without a name, fall back to the cwd picker.
     #[command(external_subcommand)]
     Other(Vec<String>),
 }
@@ -135,7 +145,11 @@ fn try_main() -> Result<()> {
     match cli.command {
         Some(Cmd::Other(vec)) => {
             let (name, agent) = parse_start_args(vec)?;
-            cmd_start(&name, &agent)
+            let agent = resolve_agent(cli.agent, agent)?;
+            match name {
+                Some(name) => cmd_start(&name, &agent),
+                None => cmd_pick_here(&agent),
+            }
         }
         Some(Cmd::List) => cmd_list(),
         Some(Cmd::Pin { name }) => {
@@ -160,7 +174,7 @@ fn try_main() -> Result<()> {
             Ok(())
         }
         Some(Cmd::Hook) => hook::run_hook(),
-        None => cmd_pick_here(),
+        None => cmd_pick_here(&resolve_agent(cli.agent, None)?),
     }
 }
 
@@ -198,38 +212,82 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
 }
 
 /// Parse `csm <name> [--agent <x>|-a <x>|--agent=<x>]` from the
-/// external-subcommand arg vec. `agent` defaults to "claude".
-fn parse_start_args(args: Vec<String>) -> Result<(String, String)> {
-    let mut name = String::new();
-    let mut agent = String::from("claude");
+/// external-subcommand arg vec. Both parts are optional: a missing name falls
+/// back to the cwd picker (`cmd_pick_here`), a missing agent defaults to
+/// "claude" (`resolve_agent`). An explicitly empty name token (`csm ""`, e.g.
+/// an unexpanded shell variable) errors instead - silently reinterpreting it
+/// as "no name" would hang scripts on the picker's stdin. The leading form
+/// `csm -a <x> <name>` never reaches here - clap claims the root flag before
+/// the external subcommand starts.
+fn parse_start_args(args: Vec<String>) -> Result<(Option<String>, Option<String>)> {
+    let mut name = None;
+    let mut agent = None;
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
         if let Some(v) = a.strip_prefix("--agent=") {
-            agent = v.to_string();
+            agent = merge_agent(agent, v.to_string())?;
         } else if a == "--agent" || a == "-a" {
             i += 1;
-            agent = args
+            let v = args
                 .get(i)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("--agent requires a value"))?;
-        } else if name.is_empty() {
-            name = a.clone();
+            agent = merge_agent(agent, v)?;
+        } else if name.is_none() {
+            if a.is_empty() {
+                anyhow::bail!("missing session name");
+            }
+            name = Some(a.clone());
         } else {
             anyhow::bail!("unexpected argument: {a:?} (usage: csm <name> [--agent <x>])");
         }
         i += 1;
     }
-    if name.is_empty() {
-        anyhow::bail!("missing session name");
-    }
     Ok((name, agent))
 }
 
-/// Bare `csm` (no subcommand): list sessions whose `origin_pwd` is the current
-/// directory and let the user pick one to start. Prints a hint and exits if
-/// none match.
-fn cmd_pick_here() -> Result<()> {
+/// Fold one trailing `--agent` value into the accumulator: repeating the same
+/// id is fine, a different id conflicts (mirrors `resolve_agent`, which
+/// arbitrates between the leading and trailing spellings).
+fn merge_agent(agent: Option<String>, v: String) -> Result<Option<String>> {
+    if let Some(prev) = &agent {
+        if prev != &v {
+            anyhow::bail!("conflicting --agent values: {prev:?} and {v:?}");
+        }
+    }
+    Ok(Some(v))
+}
+
+/// Combine the two `--agent` spellings into one id: the leading root flag
+/// (`csm -a pi <name>`, parsed by clap) and the trailing form inside the
+/// external-subcommand vec (`csm <name> -a pi`, parsed by `parse_start_args`).
+/// The same value via both spellings is fine; two different values are a user
+/// error. Defaults to "claude". Validates ids first so an unknown id (e.g.
+/// "PI") reports as `unknown agent` rather than as a conflict against a
+/// valid id.
+fn resolve_agent(root: Option<String>, parsed: Option<String>) -> Result<String> {
+    if let Some(a) = &root {
+        agent::agent_for(a)?;
+    }
+    if let Some(a) = &parsed {
+        agent::agent_for(a)?;
+    }
+    match (root, parsed) {
+        (Some(a), Some(b)) if a != b => {
+            anyhow::bail!("conflicting --agent values: {a:?} and {b:?}")
+        }
+        (Some(a), _) => Ok(a),
+        (None, Some(b)) => Ok(b),
+        (None, None) => Ok(String::from("claude")),
+    }
+}
+
+/// `csm` / `csm -a <agent>` with no session name: list sessions whose
+/// `origin_pwd` is the current directory and let the user pick one to start,
+/// launching with `agent` (id already validated by `resolve_agent`).
+/// Prints a hint and exits if none match.
+fn cmd_pick_here(agent: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let cwd_str = cwd.display().to_string();
     let idx = store::load_index()?;
@@ -245,14 +303,19 @@ fn cmd_pick_here() -> Result<()> {
             ui::epaint(ui::DIM, "no csm sessions for"),
             ui::epaint(ui::BOLD, &ui::abbrev_home(&cwd_str)),
         );
-        ui::hint("start one with: csm <name>");
+        let start = if agent == "claude" {
+            "csm <name>".to_string()
+        } else {
+            format!("csm <name> -a {agent}")
+        };
+        ui::hint(&format!("start one with: {start}"));
         return Ok(());
     }
     let Some(name) = pick_session(&format!("sessions for {}", ui::abbrev_home(&cwd_str)), rows)?
     else {
         return Ok(());
     };
-    cmd_start(&name, "claude")
+    cmd_start(&name, agent)
 }
 
 /// Print a numbered list of sessions (most recently accessed first) and read a
@@ -625,4 +688,124 @@ fn cmd_init() -> Result<()> {
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// The clap contract the launch flow depends on: a leading `-a/--agent`
+    /// is parsed as the root flag (so bare `csm -a pi` reaches the picker
+    /// path instead of dying on the external-subcommand dash rule), while
+    /// everything after the session name is captured raw into the external
+    /// vec for `parse_start_args`.
+    #[test]
+    fn leading_agent_flag_parses_as_root() {
+        for argv in [
+            vec!["csm", "-a", "pi"],
+            vec!["csm", "--agent", "pi"],
+            vec!["csm", "--agent=pi"],
+        ] {
+            let cli = Cli::parse_from(argv);
+            assert!(cli.command.is_none(), "expected no subcommand");
+            assert_eq!(cli.agent.as_deref(), Some("pi"));
+        }
+    }
+
+    #[test]
+    fn leading_agent_flag_before_name() {
+        let cli = Cli::parse_from(["csm", "-a", "pi", "foo"]);
+        match cli.command {
+            // the external vec keeps only the name; the flag was claimed by clap
+            Some(Cmd::Other(v)) => assert_eq!(v, s(&["foo"])),
+            _ => panic!("expected external subcommand"),
+        }
+        assert_eq!(cli.agent.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn trailing_agent_flag_is_captured_raw() {
+        let cli = Cli::parse_from(["csm", "foo", "-a", "pi"]);
+        match cli.command {
+            Some(Cmd::Other(v)) => assert_eq!(v, s(&["foo", "-a", "pi"])),
+            _ => panic!("expected external subcommand"),
+        }
+        assert!(cli.agent.is_none());
+    }
+
+    #[test]
+    fn parse_start_args_forms() {
+        // name only
+        let (name, agent) = parse_start_args(s(&["foo"])).unwrap();
+        assert_eq!(name.as_deref(), Some("foo"));
+        assert_eq!(agent, None);
+        // trailing agent, all spellings
+        for args in [
+            vec!["foo", "-a", "pi"],
+            vec!["foo", "--agent", "pi"],
+            vec!["--agent=pi", "foo"],
+        ] {
+            let (name, agent) = parse_start_args(s(&args)).unwrap();
+            assert_eq!(name.as_deref(), Some("foo"), "{args:?}");
+            assert_eq!(agent.as_deref(), Some("pi"), "{args:?}");
+        }
+        // empty = picker fallback, no error
+        let (name, agent) = parse_start_args(s(&[])).unwrap();
+        assert_eq!(name, None);
+        assert_eq!(agent, None);
+    }
+
+    #[test]
+    fn parse_start_args_rejects_bad_input() {
+        assert!(parse_start_args(s(&["foo", "bar"])).is_err()); // two names
+        assert!(parse_start_args(s(&["foo", "-a"])).is_err()); // flag without value
+                                                               // an empty name token is a missing name (e.g. unexpanded shell var),
+                                                               // not a picker fallback - see the doc comment on parse_start_args
+        let err = parse_start_args(s(&[""])).unwrap_err().to_string();
+        assert!(err.contains("missing session name"), "{err}");
+    }
+
+    #[test]
+    fn parse_start_args_repeated_trailing_agent() {
+        // same id repeated is fine
+        let (name, agent) = parse_start_args(s(&["foo", "-a", "pi", "-a", "pi"])).unwrap();
+        assert_eq!(name.as_deref(), Some("foo"));
+        assert_eq!(agent.as_deref(), Some("pi"));
+        // different ids conflict, same as the leading/trailing cross-form
+        let err = parse_start_args(s(&["foo", "-a", "pi", "--agent", "codex"]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("conflicting --agent values"), "{err}");
+    }
+
+    #[test]
+    fn resolve_agent_combines_and_defaults() {
+        assert_eq!(resolve_agent(None, None).unwrap(), "claude");
+        assert_eq!(resolve_agent(None, Some("pi".into())).unwrap(), "pi");
+        assert_eq!(resolve_agent(Some("pi".into()), None).unwrap(), "pi");
+        // same id via both spellings is not a conflict
+        assert_eq!(
+            resolve_agent(Some("pi".into()), Some("pi".into())).unwrap(),
+            "pi"
+        );
+    }
+
+    #[test]
+    fn resolve_agent_rejects_conflict() {
+        assert!(resolve_agent(Some("pi".into()), Some("codex".into())).is_err());
+    }
+
+    #[test]
+    fn resolve_agent_reports_unknown_id_before_conflict() {
+        // "PI" is an unknown id, not a different agent - say so instead of
+        // reporting a bogus conflict against the valid "pi"
+        let err = resolve_agent(Some("PI".into()), Some("pi".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown agent"), "{err}");
+    }
 }
