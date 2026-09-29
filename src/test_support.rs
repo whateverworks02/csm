@@ -64,11 +64,15 @@ pub(crate) fn with_home<R>(f: impl FnOnce(&Path) -> R) -> R {
 /// Isolate both `$HOME` and `$CSM_HOME` to the same fresh temp dir for `f`
 /// (e.g. `install_claude` writes `~/.claude` and renders `$CSM_HOME` into the
 /// block). Builds on [`with_home`] (which owns the temp dir and `$HOME` guard),
-/// pinning `$CSM_HOME` to the same dir. `#[serial]`.
+/// pinning `$CSM_HOME` to the same dir and clearing `$XDG_CONFIG_HOME` so
+/// XDG-honoring paths (opencode's config dir) stay inside the sandbox - CI
+/// runners export it, a dev laptop may not. `#[serial]`.
 pub(crate) fn with_isolated_home<R>(f: impl FnOnce(&Path) -> R) -> R {
     with_home(|dir| {
         let _c = EnvGuard::new("CSM_HOME");
         std::env::set_var("CSM_HOME", dir);
+        let _x = EnvGuard::new("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_CONFIG_HOME");
         f(dir)
     })
 }
