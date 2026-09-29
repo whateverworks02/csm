@@ -76,6 +76,17 @@ csm my-task                 # create/resume "my-task", launch claude (default)
 csm my-task --agent pi      # same session, launch pi
 csm my-task --agent codex   # same session, launch codex
 csm my-task --agent opencode # same session, launch opencode
+csm                         # pick a session for this directory, launch claude
+csm -a pi                   # same picker, launch pi
+```
+
+Per-agent shell shortcuts pick when called bare (`csp my-task` starts pi; bare `csp` opens the picker):
+
+```sh
+# ~/.zshrc
+csp() { csm "$@" -a pi }
+csx() { csm "$@" -a codex }
+cso() { csm "$@" -a opencode }
 ```
 
 > codex: after `csm init`, run `/hooks` in your first codex session and trust the `csm hook` SessionStart entry - codex skips untrusted hooks. Once trusted, csm revives the workspace on `/clear` and compaction.
@@ -84,8 +95,8 @@ csm my-task --agent opencode # same session, launch opencode
 
 | Command | What it does |
 |---------|-------------|
-| `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`) |
-| `csm` | Pick a session whose origin is the current directory |
+| `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`, before or after the name) |
+| `csm [-a <agent>]` | Pick a session whose origin is the current directory, launch it with that agent (default `claude`) |
 | `csm list` | List all sessions |
 | `csm show [name]` | Compact card: context, open/done tasks, scripts, notes |
 | `csm detail [name]` | Full `state.md` + task board render |
