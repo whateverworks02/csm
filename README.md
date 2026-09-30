@@ -24,17 +24,42 @@ Each session is a directory at `~/.csm/sessions/<name>/`:
 ```
 
 - **`state.md`** - the session one-pager. Sections: `Context` (what this session is and why), `Key links` (repo, docs, related sessions). Read on every launch to recall what the session is about.
-- **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done. `Done` means the local loop closed - executed, reviewed locally, PR raised if any; CI/approval/merge are outside csm. Within a section, line order = execution order: ids are stable handles, so replanning re-slots lines (reorder/insert/split/drop) instead of renumbering, and the board - not chat - carries the plan.
+- **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done. `Done` means the local loop closed - executed, reviewed locally, PR raised if any; CI/approval/merge are outside csm. Within a section, line order = execution order: ids are stable handles, so replanning re-slots lines (reorder/insert/split/drop) instead of renumbering, and the board - not chat - carries the plan. A task's preconditions ride on the same line as a `needs:` tail (see [Dependencies](#dependencies)) - the only dependency mapping, with no second graph file to maintain.
 - **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
 - **`notes/`** - focused deep-dive articles that outlive a single task; `notes/INDEX.md` is the registry.
 - **`scripts/`** - shared utility scripts; `scripts/INDEX.md` is the registry.
+
+### Dependencies
+
+A task's preconditions live on its board line as a `needs:` tail - the single dependency mapping, which agents read straight from the board:
+
+```text
+## Open
+- 002 api - implement the endpoint needs: 001
+- 003 frontend - build the form needs: 001
+- 004 integration - end-to-end test needs: 002, 003
+- 005 docs - document the endpoint
+
+## Done
+- 001 contract - publish the v2 schema
+```
+
+`002` and `003` fork off `001`; `004` joins them. `005` has no preconditions, so it carries none.
+
+- `needs: <task-id>` - a task in this session. `needs: <session>/<task-id>` - another session's board, for work that spans repos: `needs: api-contract/012 [interface PR merged]`.
+- No condition = the upstream reached local `Done` on its board. A bracketed condition names what else the upstream owes; a local `Done` never implies it, so an unconfirmed delivery stays written as a condition rather than being assumed met.
+- Several refs are comma-separated, and all must hold before the task is claimable.
+- The tail stays refs and conditions; the evidence for a delivery is recorded in the consuming task's `Progress`.
+- Line order within a section is execution order among the startable tasks - order alone is not a dependency.
+- Replanning edits the same tails: reordering lines changes no relation, and dropping a task fixes or removes the refs pointing at it, so no dangling edge survives.
+- Sessions written before this rule keep working as-is: no `needs:` means no preconditions, and nothing is migrated.
 
 ## Task lifecycle
 
 Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can do both in a session.
 
-1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add its line under `Open` at its execution position (next free id, wherever it slots).
-2. **Claim & execute** (worker): pick from `Open` or `Pending fix`; execute the `SOP`, recording outcomes in `Progress`.
+1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add its line under `Open` at its execution position (next free id, wherever it slots) with its `needs:` tail when it has real preconditions.
+2. **Claim & execute** (worker): pick from `Open` or `Pending fix` whose `needs:` hold; execute the `SOP`, recording outcomes in `Progress`.
 3. **Submit** (worker): done or stuck - if stuck, add an `Open questions` bullet first; move the INDEX line to `Pending review`.
 4. **Review** (coordinator): approve -> `Done`; or write `Review` + answer `Open questions` -> `Pending fix`.
 

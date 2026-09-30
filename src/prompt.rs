@@ -19,17 +19,18 @@ pub fn csm_block(csm_home: &str) -> String {
 A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks/INDEX.md` at `{csm_home}/sessions/$CSM_SESSION/` (a `[csm]` block, if present, is only a snapshot of these). If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
 
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
-- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed, reviewed locally, PR raised if any - CI/approval/merge are outside csm. Move a task's line between sections to change its status; within a section, line order = execution order. Ids are stable handles: a new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board, and only the board, carries the plan.
+- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed, reviewed locally, PR raised if any - CI/approval/merge are outside csm. Move a task's line between sections to change its status; within a section, line order = execution order. Ids are stable handles: a new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board, and only the board, carries the plan; reordering changes no `needs:`, and dropping a task fixes or removes the refs pointing at it.
+- `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and is never assumed met. A task with no real preconditions carries none, and the delivery detail belongs in the consuming task's Progress - the tail stays refs and conditions.
 - `tasks/<id>-<slug>.md` - one file per task. Sections: Scope, AC, SOP, Open questions, Progress, Review. Progress = outcome records (what changed, where - files/PR - and what's left), never a timestamped diary. No status/owner here (those live in INDEX).
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
 ### Working mode
 
-1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`.
+1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`. Check a line's `needs:` before claiming it: a bare ref holds when that task sits under Done on its board, a `[condition]` only when verified - unmet or unverified means take the next line, and name the wait.
 2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can do both - do whichever the current step needs.
-   - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC + SOP in the task file - the procedure is part of the design). Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix; at review, normalize Progress to outcome records (strip timestamped/narrative lines). Workers self-claim - don't assign or track them.
-   - **Worker actions**: claim one task from Open or Pending fix (no INDEX mark). Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
+   - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC + SOP in the task file - the procedure is part of the design) with their `needs:` tails: real preconditions only, so independent tasks stay unlinked; no unknown refs, self-dependency or cycles; an external condition you cannot confirm stays written as a condition. Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix; at review, normalize Progress to outcome records (strip timestamped/narrative lines). Workers self-claim - don't assign or track them.
+   - **Worker actions**: claim one task from Open or Pending fix whose `needs:` hold (no INDEX mark). Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
 3. **Write discipline.** csm files orient the next agent - don't duplicate what git already records. Default to not writing; before writing, ask: \"will the next agent need this to orient, claim, or review?\" If not, skip it.
 4. **Before you stop:** leave the files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: reviewed INDEX lines moved.
 5. **Cross-repo:** the same session name in each repo shares one `state.md` + `tasks/`. Reference the name in commits/PRs.
@@ -100,5 +101,36 @@ mod tests {
         assert!(block.contains("Replan by editing the board"));
         // The board is a replan surface, not an append-only log.
         assert!(block.contains("reorder/insert/split/drop"));
+    }
+
+    #[test]
+    fn csm_block_carries_the_needs_dependency_mapping() {
+        let block = csm_block("/home/user/.csm");
+        // One mapping, on the board line - no second file, no second graph.
+        assert!(block.contains("`needs:` tail - the dependency mapping, and the only one"));
+        // Reference forms: same session, and cross-session for cross-repo work.
+        assert!(block.contains("needs: 003` (this session)"));
+        assert!(block.contains("needs: api-contract/012` (another session)"));
+        // Several refs all must hold.
+        assert!(block.contains("comma-separated when several - all must hold"));
+        // Default condition is the upstream's local Done; a bracketed condition
+        // is extra and never assumed satisfied.
+        assert!(block.contains("No condition = the upstream reached local Done on its board"));
+        assert!(block.contains("never assumed met"));
+        // No implicit serialization: order is not a dependency.
+        assert!(block.contains("A task with no real preconditions carries none"));
+        // The tail stays a mapping; the evidence lives in the consuming task.
+        assert!(block.contains("the delivery detail belongs in the consuming task's Progress"));
+        // Claim gate and the local-Done vs external-delivery distinction.
+        assert!(block.contains("Check a line's `needs:` before claiming it"));
+        assert!(block.contains("a `[condition]` only when verified"));
+        // Coordinator keeps the mapping sane at create and replan time.
+        assert!(block.contains("real preconditions only, so independent tasks stay unlinked"));
+        assert!(block.contains("no unknown refs, self-dependency or cycles"));
+        assert!(
+            block.contains("an external condition you cannot confirm stays written as a condition")
+        );
+        assert!(block.contains("reordering changes no `needs:`"));
+        assert!(block.contains("dropping a task fixes or removes the refs pointing at it"));
     }
 }

@@ -43,16 +43,16 @@ description: Creating csm tasks for a new mission - grill the human, write the s
 
 # csm-plan
 
-Architect pass over a csm session: `notes/` + the human's mission in; a rewritten `state.md` + executor-grade tasks out. The csm prompt owns the workflow (roles, board moves); this skill owns authoring quality. Inputs are `state.md`, `notes/`, and the mission - plan from notes, and read code only for a targeted spot-check of a load-bearing note claim marked uncertain.
+Architect pass over a csm session: `notes/` + the human's mission in; a rewritten `state.md` + executor-grade tasks out. The csm prompt's working protocol owns roles and board moves; this skill owns authoring quality. Inputs are `state.md`, `notes/`, and the mission - plan from notes, and read code only for a targeted spot-check of a load-bearing note claim marked uncertain.
 
 ## Steps
 
 1. **Grill.** Enumerate every decision the notes leave open - the decisions the ACs will rest on. Ask the human in one batch: each question names the decision, the options the notes support, and what breaks under each option. The grill is the only fuse against scout gaps - stop only when every planned AC has an unambiguous basis (a note with evidence, or an answer).
 2. **One-pager.** Rewrite `state.md` Context: mission in one line, the chosen approach, one line per rejected alternative with the why, current focus. Refresh Key links.
-3. **Decompose.** One task per worker run. Each task file states its preconditions - which tasks and contracts it assumes - as its first Scope line; csm has no dependency graph, the precondition line is the mechanism.
+3. **Decompose.** One task per worker run. Record each task's real preconditions in the board's `needs:` tail; the tail's rules are the working protocol's, not this skill's. Independent tasks carry none - board position is execution order, never a dependency.
 4. **SOP for a weak executor.** Every step ends on a completion criterion the executor itself can check (a command output, a file state), never on judgment. Exact commands where a command exists, exact paths - `src/store.rs`, never "the relevant file". Guardrails as targets: which files to touch, which convention to match. Every AC verifiable by the reviewer without asking the worker.
 5. **Fuse.** A decision with neither note basis nor human answer goes back to the human or out as a follow-up scout question. Inventing a basis is the one way this pass fails silently.
-6. **Done when:** every task file has Scope/AC/SOP, every INDEX line sits under Open, `state.md` is the one-pager, and zero grill questions stand unanswered.
+6. **Done when:** every task file has Scope/AC/SOP, every INDEX line sits under Open, each line carrying its `needs:` tail when the task has real preconditions, the mapping satisfies the working protocol, `state.md` is the one-pager, and zero grill questions stand unanswered.
 "#;
 
 /// The `/csm-scout` skill. The frontmatter `description` front-loads the
@@ -249,6 +249,21 @@ mod tests {
                     skill.id
                 );
             }
+        }
+
+        #[test]
+        fn plan_skill_points_at_the_board_dependency_mapping() {
+            // The mapping is the board's `needs:` tail; the skill records real
+            // preconditions there and points at the working protocol...
+            assert!(PLAN_SKILL_MD.contains("`needs:` tail"));
+            assert!(PLAN_SKILL_MD.contains("working protocol"));
+            assert!(PLAN_SKILL_MD.contains("Independent tasks carry none"));
+            // ...without restating a second rule set that can drift: no format,
+            // no conditions, no graph invariants of its own.
+            assert!(!PLAN_SKILL_MD.contains("local Done"));
+            assert!(!PLAN_SKILL_MD.contains("comma-separated"));
+            assert!(!PLAN_SKILL_MD.contains("Every ref must resolve"));
+            assert!(!PLAN_SKILL_MD.contains("acyclic"));
         }
     }
 
