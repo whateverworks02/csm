@@ -19,7 +19,7 @@ pub fn csm_block(csm_home: &str) -> String {
 A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks/INDEX.md` at `{csm_home}/sessions/$CSM_SESSION/` (a `[csm]` block, if present, is only a snapshot of these). If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
 
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
-- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed, reviewed locally, PR raised if any - CI/approval/merge are outside csm. Move a task's line between sections to change its status; within a section, line order = execution order. Ids are stable handles: a new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board, and only the board, carries the plan; reordering changes no `needs:`, and dropping a task fixes or removes the refs pointing at it.
+- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed, reviewed locally - a PR, if any, is raised on the user's explicit go-ahead after the review; CI/approval/merge are outside csm. Move a task's line between sections to change its status; within a section, line order = execution order. Ids are stable handles: a new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board, and only the board, carries the plan; reordering changes no `needs:`, and dropping a task fixes or removes the refs pointing at it.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and is never assumed met. A task with no real preconditions carries none, and the delivery detail belongs in the consuming task's Progress - the tail stays refs and conditions.
 - `tasks/<id>-<slug>.md` - one file per task. Sections: Scope, AC, SOP, Open questions, Progress, Review. Progress = outcome records (what changed, where - files/PR - and what's left), never a timestamped diary. No status/owner here (those live in INDEX).
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
@@ -93,8 +93,13 @@ mod tests {
     fn csm_block_done_is_the_local_loop_and_the_board_carries_the_plan() {
         let block = csm_block("/home/user/.csm");
         // Done closes the local loop; upstream status never gates it.
-        assert!(block.contains("**Done** = executed, reviewed locally, PR raised if any"));
+        // The PR is the hand-off, not loop work: user-gated, after the local review.
+        assert!(block.contains("**Done** = executed, reviewed locally"));
+        assert!(block
+            .contains("a PR, if any, is raised on the user's explicit go-ahead after the review"));
         assert!(block.contains("CI/approval/merge are outside csm"));
+        // The PR never re-enters the Done equation as worker work.
+        assert!(!block.contains("reviewed locally, PR raised"));
         // Execution order lives in board line order, not in ids or chat.
         assert!(block.contains("line order = execution order"));
         assert!(block.contains("Ids are stable handles"));
