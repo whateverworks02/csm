@@ -23,6 +23,7 @@ mod gc;
 mod hook;
 mod inject;
 mod markdown;
+mod needs;
 mod prompt;
 mod skills;
 mod store;
@@ -33,6 +34,7 @@ mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::io::Write;
 
 #[derive(Parser)]
@@ -571,6 +573,27 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     card_entries_row("open", &board.open);
     card_entries_row("done", &board.done);
 
+    // needs - the dependency mapping, read straight from the board's `needs:`
+    // tails (the one mapping the agents read), so it cannot drift from the
+    // plan. One line per live task with refs; each line is also its wait
+    // reason. `ready` turns it into a decision: what can be claimed now.
+    // Dependency-free sessions show nothing here - the bare card stays.
+    // Cross-session refs resolve against each foreign board, read at most
+    // once per session regardless of how many refs point into it.
+    let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
+    if let Some(view) = needs::build_view(&board, &name, &mut |s, t| {
+        foreign
+            .entry(s.to_string())
+            .or_insert_with(|| workspace::read_tasks_board(s))
+            .as_ref()
+            .and_then(|b| b.status_of(t))
+    }) {
+        card_multiline_row("needs", &view.needs_lines);
+        if !view.ready_line.is_empty() {
+            card_row("ready", &view.ready_line);
+        }
+    }
+
     let scripts = workspace::list_scripts(&name);
     card_list_row("scripts", &scripts);
 
@@ -581,25 +604,21 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 
 /// Render a card row listing task entries (id + slug) for one board status.
 /// Up to `CAP` entries show; a dim `... +N more` line follows when there are
-/// more. The entry text is the board line after `- ` (e.g. `001 fix-cookie -
-/// wire SameSite`); we show the `id slug` prefix (up to the first ` - `) and
-/// drop the gist for a compact, recognizable row. Layout (label, continuation
-/// indent, "(none)") is shared via [`card_multiline_row`].
+/// more. The `id slug` head (gist and `needs:` tail dropped) comes from
+/// [`workspace::entry_head`], the one home of the entry-format rule. Layout
+/// (label, continuation indent, "(none)") is shared via [`card_multiline_row`].
 fn card_entries_row(label: &str, entries: &[String]) {
     const CAP: usize = 3;
     let mut lines: Vec<String> = entries
         .iter()
         .take(CAP)
-        .map(|raw| {
-            raw.trim()
-                .split_once(" - ")
-                .map(|(head, _)| head.trim())
-                .unwrap_or_else(|| raw.trim())
-                .to_string()
-        })
+        .map(|raw| workspace::entry_head(raw).to_string())
         .collect();
     if entries.len() > CAP {
-        lines.push(ui::paint(ui::DIM, &format!("... +{} more", entries.len() - CAP)).to_string());
+        lines.push(ui::paint(
+            ui::DIM,
+            &format!("... +{} more", entries.len() - CAP),
+        ));
     }
     card_multiline_row(label, &lines);
 }
