@@ -484,6 +484,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_tasks_board_tolerates_needs_tail() {
+        // The `needs:` dependency tail rides at the end of the task line: still
+        // one entry per line, tail preserved verbatim (so `csm detail` shows the
+        // mapping, and the card's `id slug` head is unaffected).
+        let board = parse_tasks_board(
+            "## Open\n\
+             - 004 integration - wire the client needs: api-contract/012 [interface PR merged]\n\
+             - 005 docs - document the endpoint needs: 002, 003\n\n\
+             ## Done\n- 002 api - implement the endpoint\n",
+        );
+        assert_eq!(board.open.len(), 2);
+        assert_eq!(board.done.len(), 1);
+        assert_eq!(total(&board), 3);
+        assert_eq!(
+            board.open[0],
+            "004 integration - wire the client needs: api-contract/012 [interface PR merged]"
+        );
+        assert_eq!(
+            board.open[1],
+            "005 docs - document the endpoint needs: 002, 003"
+        );
+    }
+
+    #[test]
     fn parse_tasks_board_collects_bold_entries() {
         // sections() inline-strips, so a `**bold**` gist still counts as an entry.
         let board = parse_tasks_board("## Open\n- 001 **refactor** - slim\n");
