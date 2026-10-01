@@ -116,6 +116,70 @@ pub struct TasksBoard {
     pub done: Vec<String>,
 }
 
+/// Board status of a task entry: the section it sits under. The label is the
+/// section title, so the parser, the card, and the needs view share one naming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Open,
+    PendingReview,
+    PendingFix,
+    Done,
+}
+
+impl Status {
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Open => "Open",
+            Status::PendingReview => "Pending review",
+            Status::PendingFix => "Pending fix",
+            Status::Done => "Done",
+        }
+    }
+}
+
+impl TasksBoard {
+    /// Each section's entries paired with its status, in board order - the one
+    /// walk of the four sections, so readers can't drift on order or naming.
+    pub fn sections(&self) -> [(&[String], Status); 4] {
+        [
+            (&self.open, Status::Open),
+            (&self.pending_review, Status::PendingReview),
+            (&self.pending_fix, Status::PendingFix),
+            (&self.done, Status::Done),
+        ]
+    }
+
+    /// Status of board entry `id` across all sections; `None` when absent.
+    /// This is how a `needs:` ref's Done is judged - against the target board
+    /// itself.
+    pub fn status_of(&self, id: &str) -> Option<Status> {
+        for (entries, status) in self.sections() {
+            if entries.iter().any(|e| entry_id(e) == Some(id)) {
+                return Some(status);
+            }
+        }
+        None
+    }
+}
+
+/// The `id slug` head of a board entry: the text before the `needs:` tail
+/// (which ends the line per the task-004 protocol) and before the ` - gist`
+/// separator. Shared by the card rows and the needs view so one format rule
+/// has one home.
+pub fn entry_head(entry: &str) -> &str {
+    let head = entry.split_once(" needs:").map(|(h, _)| h).unwrap_or(entry);
+    head.split_once(" - ")
+        .map(|(h, _)| h)
+        .unwrap_or(head)
+        .trim()
+}
+
+/// First whitespace token of a board entry's head (`001` from
+/// `001 fix-cookie-set - wire SameSite`); `None` for entries without one.
+pub fn entry_id(entry: &str) -> Option<&str> {
+    entry_head(entry).split_whitespace().next()
+}
+
 /// Collect task entries per status from `tasks/INDEX.md` content. Layers on
 /// [`crate::markdown::sections`] (the single `## Section` scanner shared with
 /// `csm detail` / `csm show`) so the board and the readers agree on what a
@@ -448,6 +512,30 @@ mod tests {
         // sections() inline-strips, so a `**bold**` gist still counts as an entry.
         let board = parse_tasks_board("## Open\n- 001 **refactor** - slim\n");
         assert_eq!(board.open.len(), 1);
+    }
+
+    #[test]
+    fn entry_head_strips_gist_and_needs_tail() {
+        use super::entry_head;
+        assert_eq!(
+            entry_head("001 fix-cookie - wire SameSite"),
+            "001 fix-cookie"
+        );
+        assert_eq!(
+            entry_head("003 doctor check needs: 001"),
+            "003 doctor check"
+        );
+        assert_eq!(entry_head("004 e2e - x needs: 002, 003 [gate]"), "004 e2e");
+        assert_eq!(entry_head("005 bare"), "005 bare");
+    }
+
+    #[test]
+    fn status_of_finds_entries_across_sections() {
+        use super::Status;
+        let board = parse_tasks_board("## Open\n- 001 a needs: 002\n\n## Done\n- 002 b - x\n");
+        assert_eq!(board.status_of("001"), Some(Status::Open));
+        assert_eq!(board.status_of("002"), Some(Status::Done));
+        assert_eq!(board.status_of("003"), None);
     }
 
     #[test]

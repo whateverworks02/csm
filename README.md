@@ -123,7 +123,7 @@ cso() { csm "$@" -a opencode }
 | `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`, before or after the name) |
 | `csm [-a <agent>]` | Pick a session whose origin is the current directory, launch it with that agent (default `claude`) |
 | `csm list` | List all sessions |
-| `csm show [name]` | Compact card: context, open/done tasks, scripts, notes |
+| `csm show [name]` | Compact card: context, tasks, needs, ready, scripts, notes |
 | `csm detail [name]` | Full `state.md` + task board render |
 | `csm init` | (Re)install the hook, the prompt, and the csm skills - rerun after upgrading |
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
@@ -133,6 +133,19 @@ cso() { csm "$@" -a opencode }
 | `csm doctor [--fix]` | Diagnose and repair consistency |
 
 `show` and `detail` default to `$CSM_SESSION`, else open a picker. `csm init` (run by the installer) installs the hook, the prompt, and the csm skills - rerun it after upgrading csm.
+
+### Reading the plan in `csm show`
+
+The card reads the board's `needs:` tails directly, so the view is the plan the agents read - there is no second graph file to keep in sync, and a replan shows up on the next `show`. One line per live task with refs; `ready` lists what can be claimed now (`Open` and `Pending fix` whose refs all hold):
+
+```text
+  needs       002 api (Open) needs 001 contract (Done)
+              003 frontend (Open) needs 001 contract (Done)
+              004 e2e (Open) needs 002 api (Open), 003 frontend (Open)
+  ready       002, 003
+```
+
+A line is also its wait reason: 004 is blocked because the refs it names are still `(Open)`. Long dependency lines wrap in the terminal so every ref, status, and condition remains visible. A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `api-contract/012 (Done) [interface PR merged] (unverified)`. Retained conditions always require checking in this view; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `(missing)` / `(unknown)` instead of satisfied. A dependency cycle is called out with a `warning:` line. Sessions with no `needs:` tails keep the plain card.
 
 ## License
 
