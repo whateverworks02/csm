@@ -1,8 +1,5 @@
-//! csm-shipped skills, distributed by `csm init`: `/csm-plan`, the authoring
-//! discipline for the coordinator's architect pass (grill -> one-pager ->
-//! executor-grade tasks), and `/csm-scout`, the exploration discipline for the
-//! scout pass that precedes it (notes an architect can plan from) - the two
-//! variance-prone handoffs in the tiered pipeline (`notes/scout-plan-skills.md`).
+//! csm-shipped planning and investigation skills, distributed by `csm init`.
+//! The working protocol owns the workflow; these skills own authoring quality.
 //!
 //! Mirrors `prompt.rs`: each const here is the single source of truth, versioned
 //! with the tool and rendered at deploy time. Every target below is csm-owned -
@@ -30,55 +27,43 @@ use crate::ui;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-/// The `/csm-plan` skill. The frontmatter `description` is the top-level
-/// context pointer (writing-for-agents): front-loads the trigger branch
-/// (creating/planning csm tasks), names the pass with leading words (grill,
-/// one-pager, executor-grade). The body is steps that each end on a completion
-/// criterion; the csm prompt owns the workflow (roles, board moves) and is not
-/// restated.
+/// Planning authoring guidance, triggered by a new mission or replan.
 pub const PLAN_SKILL_MD: &str = r#"---
 name: csm-plan
-description: Creating csm tasks for a new mission - grill the human, write the state.md one-pager, decompose into executor-grade tasks
+description: Creating csm tasks for a new mission or a replan - resolve decisions and write executable tasks
 ---
 
 # csm-plan
 
-Architect pass over a csm session: `notes/` + the human's mission in; a rewritten `state.md` + executor-grade tasks out. The csm prompt's working protocol owns roles and board moves; this skill owns authoring quality. Inputs are `state.md`, `notes/`, and the mission - plan from notes, and read code only for a targeted spot-check of a load-bearing note claim marked uncertain.
+Use the mission, `state.md`, the board, and relevant notes to plan the work. The csm prompt's working protocol owns record structure, dependencies, and lifecycle; this skill owns authoring quality.
 
 ## Steps
 
-1. **Grill.** Enumerate every decision the notes leave open - the decisions the ACs will rest on. Ask the human in one batch: each question names the decision, the options the notes support, and what breaks under each option. The grill is the only fuse against scout gaps - stop only when every planned AC has an unambiguous basis (a note with evidence, or an answer).
-2. **One-pager.** Rewrite `state.md` Context: mission in one line, the chosen approach, one line per rejected alternative with the why, current focus. Refresh Key links.
-3. **Decompose.** One task per worker run. Record each task's real preconditions in the board's `needs:` tail; the tail's rules are the working protocol's, not this skill's. Independent tasks carry none - board position is execution order, never a dependency.
-4. **SOP for a weak executor.** Every step ends on a completion criterion the executor itself can check (a command output, a file state), never on judgment. Exact commands where a command exists, exact paths - `src/store.rs`, never "the relevant file". Guardrails as targets: which files to touch, which convention to match. Every AC verifiable by the reviewer without asking the worker.
-5. **Fuse.** A decision with neither note basis nor human answer goes back to the human or out as a follow-up scout question. Inventing a basis is the one way this pass fails silently.
-6. **Done when:** every task file has Scope/AC/SOP, every INDEX line sits under Open, each line carrying its `needs:` tail when the task has real preconditions, the mapping satisfies the working protocol, `state.md` is the one-pager, and zero grill questions stand unanswered.
+1. **Resolve decisions.** Identify decisions that affect the plan. Use available evidence; investigate missing facts with targeted code reads. Ask the user for unresolved choices requiring their judgment, grouping questions with options and tradeoffs. Continue when the proposed work has a supported scope; record unresolved prerequisites for any deferred work.
+2. **Decompose.** Create or revise tasks around independently verifiable outcomes. Record each task's real preconditions in the board's `needs:` tail according to the working protocol. Each task has a bounded Scope and AC a reviewer can verify.
+3. **Write the SOP.** Apply the working protocol's record depth. Name the files, operations, and conventions needed to execute the task, with exact commands where useful. Each step ends with an observable completion criterion; the procedure covers the task's AC.
+4. **Update context.** Update `state.md` Context and Key links where the mission, approach, or current focus changed. Retain rationale needed to guide subsequent work; the resulting one-pager describes the current plan.
+5. **Done when:** tasks created or revised in this pass have supported Scope, verifiable AC, executable SOP, and dependencies recorded under the working protocol. New tasks enter Open; existing tasks retain their status unless an actual lifecycle transition occurred. Unresolved prerequisites are explicit, and context reflects the plan.
+
 "#;
 
-/// The `/csm-scout` skill. The frontmatter `description` front-loads the
-/// trigger branch (exploring to feed a planning pass); the body is steps that
-/// each end on a completion criterion. Leading words: question-first (explore
-/// to answer, not to tour), read vs inferred (the trust mark on every claim),
-/// `open:` (an unknown is output, not failure), report-don't-decide (the
-/// architect picks). Like csm-plan, it owns discipline only - the csm prompt
-/// owns the workflow, and csm-plan's own content is not restated.
+/// Investigation authoring guidance, triggered by specific open questions.
 pub const SCOUT_SKILL_MD: &str = r#"---
 name: csm-scout
-description: Exploring a codebase to feed a csm planning pass - write the notes an architect will plan from
+description: Exploring a codebase to answer specific open questions for a csm planning pass - write the notes an architect will plan from
 ---
 
 # csm-scout
 
-Scout pass over the codebase: the mission's open decisions in; `notes/` out. The notes are the architect's only eyes on the code - the planning pass reads notes, not code - so every decision the plan makes rests on what this pass writes.
+Investigate specific open questions and record evidence the planning pass can use.
 
 ## Steps
 
-1. **Question list first.** Before walking any file, derive from the mission the decisions the plan must make - schema? API shape? which layer? what exists already? Explore to answer those questions; a file read without a question it serves is a tour.
-2. **One note per question.** Title = the question. Body: the answer, evidence (`path:line` for every non-trivial claim), alternatives considered + tradeoffs, unknowns. Mark each claim **read** (you saw it) or **inferred** (you concluded it) - the architect must know which claims to trust blindly.
-3. **Unknowns are output.** A note ending in `open: X` is correct - it is grill material for the planning pass. A guess dressed as an answer is the one failure this pass can fail silently.
-4. **Report, don't decide.** Present the options + tradeoffs and stop; the architect picks. A note that concludes "so we should do X" has overstepped.
-5. **Register.** One-line gist per note in `notes/INDEX.md`.
-6. **Done when:** every decision the plan must make is either answered with evidence or explicitly listed as open.
+1. **Frame the question.** Identify the decision the requested investigation informs and the evidence needed to answer it. Read the files that can supply that evidence; finish when the question is answered or the missing evidence is identified.
+2. **Record the findings.** Update the relevant note, or create one when the question has no existing home. Give the answer, locatable evidence (`path:line` for code claims), and relevant alternatives and tradeoffs. Distinguish observations from inferences; state specific unknowns and the evidence needed to resolve them. The reader can trace each consequential claim to its basis and distinguish options from chosen decisions.
+3. **Register.** Update the note's one-line gist in `notes/INDEX.md` so the findings can be located.
+4. **Done when:** each question in this investigation is answered with evidence or has an explicit evidence gap, and the findings are registered.
+
 "#;
 
 /// A csm-shipped skill: one const (the single source of truth), rendered by
@@ -217,6 +202,19 @@ mod tests {
                     "{}: description must front-load the trigger, got: {desc}",
                     skill.id
                 );
+                // The branch itself: plan fires for a new mission or replan,
+                // not a small task added to a live board; scout fires around
+                // specific open questions, not routine exploration.
+                let branch = match skill.id {
+                    "csm-plan" => "new mission or a replan",
+                    "csm-scout" => "specific open questions",
+                    other => panic!("no branch assertion for skill {other}"),
+                };
+                assert!(
+                    desc.contains(branch),
+                    "{}: description must carry the trigger branch, got: {desc}",
+                    skill.id
+                );
             }
         }
 
@@ -252,12 +250,24 @@ mod tests {
         }
 
         #[test]
+        fn plan_skill_resolves_decisions_and_limits_replanning_scope() {
+            assert!(PLAN_SKILL_MD.contains("investigate missing facts with targeted code reads"));
+            assert!(PLAN_SKILL_MD.contains("choices requiring their judgment"));
+            assert!(PLAN_SKILL_MD.contains("Apply the working protocol's record depth"));
+            assert!(PLAN_SKILL_MD.contains("existing tasks retain their status"));
+            assert!(!PLAN_SKILL_MD.contains("every INDEX line sits under Open"));
+            assert!(!PLAN_SKILL_MD.contains("marked uncertain"));
+            assert!(!SCOUT_SKILL_MD.contains("trust blindly"));
+            assert!(SCOUT_SKILL_MD.contains("each question in this investigation"));
+        }
+
+        #[test]
         fn plan_skill_points_at_the_board_dependency_mapping() {
             // The mapping is the board's `needs:` tail; the skill records real
             // preconditions there and points at the working protocol...
-            assert!(PLAN_SKILL_MD.contains("`needs:` tail"));
+            assert!(PLAN_SKILL_MD
+                .contains("Record each task's real preconditions in the board's `needs:` tail"));
             assert!(PLAN_SKILL_MD.contains("working protocol"));
-            assert!(PLAN_SKILL_MD.contains("Independent tasks carry none"));
             // ...without restating a second rule set that can drift: no format,
             // no conditions, no graph invariants of its own.
             assert!(!PLAN_SKILL_MD.contains("local Done"));

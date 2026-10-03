@@ -25,7 +25,7 @@ Each session is a directory at `~/.csm/sessions/<name>/`:
 
 - **`state.md`** - the session one-pager. Sections: `Context` (what this session is and why), `Key links` (repo, docs, related sessions). Read on every launch to recall what the session is about.
 - **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done. `Done` means the local loop closed - executed, reviewed locally; a PR, if any, is raised on the user's explicit go-ahead after the review; CI/approval/merge are outside csm. Within a section, line order = execution order: ids are stable handles, so replanning re-slots lines (reorder/insert/split/drop) instead of renumbering, and the board - not chat - carries the plan. A task's preconditions ride on the same line as a `needs:` tail (see [Dependencies](#dependencies)) - the only dependency mapping, with no second graph file to maintain.
-- **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
+- **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The same sections serve every task, scaled to its size (see [Scaling the record](#scaling-the-record-to-the-task)). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
 - **`notes/`** - focused deep-dive articles that outlive a single task; `notes/INDEX.md` is the registry.
 - **`scripts/`** - shared utility scripts; `scripts/INDEX.md` is the registry.
 
@@ -58,19 +58,77 @@ A task's preconditions live on its board line as a `needs:` tail - the single de
 
 Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can do both in a session.
 
-1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP`; add its line under `Open` at its execution position (next free id, wherever it slots) with its `needs:` tail when it has real preconditions.
+A normal continuation resumes the plan already on the board: planning (`/csm-plan`) starts on a real planning need - a new mission, or a decision that would change the plan and can't be settled from what's recorded - and scouting (`/csm-scout`) runs around a specific question whose answer needs the code.
+
+1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP` sized to the task; add its line under `Open` at its execution position (next free id, wherever it slots) with its `needs:` tail when it has real preconditions.
 2. **Claim & execute** (worker): pick from `Open` or `Pending fix` whose `needs:` hold; execute the `SOP`, recording outcomes in `Progress`.
 3. **Submit** (worker): done or stuck - if stuck, add an `Open questions` bullet first; move the INDEX line to `Pending review`.
 4. **Review** (coordinator): approve -> `Done`; or write `Review` + answer `Open questions` -> `Pending fix`.
 
 `state.md` and `tasks/INDEX.md` are the orientation surface - injected into the agent on launch. Per-task files carry the detail; `notes/` and `scripts/` carry reusable knowledge.
 
+### Scaling the record to the task
+
+Every task keeps the same six sections and the same lifecycle; only the depth changes. A verifiable `AC` and the local review are never skipped - `Open questions` carries content only when there is something to say.
+
+A simple fix - one behavior, no handoff - shown after review:
+
+```markdown
+# 006 - `csm list` panics on an empty index
+
+## Scope
+`csm list` panics when no sessions are indexed; return an empty listing instead.
+
+## AC
+- `csm list` on an empty index prints the empty-state line and exits 0.
+- Listing behavior with sessions present is unchanged.
+
+## SOP
+Guard the empty case in `src/main.rs`; add a regression test.
+
+## Open questions
+
+## Progress
+- Guarded the empty index in `src/main.rs`; regression test added; `cargo test` green.
+
+## Review
+- Approved - both AC verified.
+```
+
+Cross-repo work another agent may pick up keeps the same sections, with executor-grade steps (every step ends on a completion criterion the executor itself can check) and a `needs:` tail on its board line - also shown after review:
+
+```markdown
+# 007 - client batch retry against the v2 endpoint
+
+## Scope
+Send batch requests through the v2 endpoint once the server contract lands; keep a v1 fallback.
+
+## AC
+- Batch calls use v2 when the contract is available; a 404 falls back to v1.
+- The integration test covers both paths.
+
+## SOP
+1. Add the v2 request builder in `src/api/batch.rs`; `cargo test api::batch` green.
+2. Wire the 404 -> v1 fallback in `src/api/mod.rs`; the test covers the fallback path.
+3. Run the integration suite against staging; record the result in `Progress`.
+
+## Open questions
+
+## Progress
+- v2 builder and fallback wired; integration suite green against staging.
+
+## Review
+- Approved - the fallback path is covered by the test.
+```
+
+Board line: `- 007 batch-retry - v2 with v1 fallback needs: api-contract/012 [v2 PR merged]`.
+
 ## The csm skills
 
 `csm init` ships two skills - the authoring discipline at the pipeline's two variance-prone handoffs:
 
-- **csm-plan** (architect pass): grill the human in one batch (every question names the decision, the options, and what breaks under each), write the `state.md` one-pager, decompose into tasks whose SOPs a weak executor can run (every step ends on a completion criterion the executor itself can check).
-- **csm-scout** (scout pass): explore to answer questions, not to tour files - one note per question with `path:line` evidence, claims marked read vs inferred, unknowns listed as `open:` (they are grill material, not failure), options reported but never picked.
+- **csm-plan** (architect pass): for a new mission or a replan - grill the human in one batch on the questions that would change the plan (each names the decision, the options, and what breaks under each; a pass with none asks none), write the `state.md` one-pager, decompose into tasks whose `SOP`s are sized to the work (see [Scaling the record](#scaling-the-record-to-the-task)).
+- **csm-scout** (scout pass): for a specific open question whose answer needs the code - explore to answer questions, not to tour files - one note per question with `path:line` evidence, claims marked read vs inferred, unknowns listed as `open:` (they are grill material, not failure), options reported but never picked.
 
 Claude gets both as real skills - `/csm-plan`, `/csm-scout`, auto-triggered - and opencode auto-loads that same `~/.claude/skills/` directory as external skills, so it reads them with no separate deployment. Vendor-neutral copies live at `~/.csm/skills/plan.md` and `~/.csm/skills/scout.md`. Update loop is the same as the prompt: upgrade csm, rerun `csm init`.
 
