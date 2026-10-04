@@ -21,16 +21,16 @@ A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
 - `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed, reviewed locally - a PR, if any, is raised on the user's explicit go-ahead after the review; CI/approval/merge are outside csm. Move a task's line between sections to change its status; within a section, line order = execution order. Ids are stable handles: a new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board, and only the board, carries the plan.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
-- `tasks/<id>-<slug>.md` - one file per task. Same sections for every task - Scope, AC, SOP, Open questions, Progress, Review - with enough detail for another agent to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. A verifiable AC and the local review are never skipped; Open questions is filled when there is something to say. Progress = outcome records (what changed, where - files/PR - and what's left), never a timestamped diary. No status/owner here (those live in INDEX).
+- `tasks/<id>-<slug>.md` - one file per task. Same sections for every task - Scope, AC, SOP, Open questions, Progress, Review - with enough detail for another agent to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. Every task has verifiable AC; Open questions is filled when there is something to say. Progress = outcome records (what changed, where - files/PR - and what's left), never a timestamped diary. No status/owner here (those live in INDEX).
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
 ### Working mode
 
 1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`. Resume the recorded plan. Plan when the mission or approach needs to change; investigate when a specific unanswered question requires code evidence.
-2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can do both - do whichever the current step needs.
+2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can serve both roles on different tasks; a worker submits its own work for coordinator review.
    - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC + SOP in the task file - the procedure is part of the design) with their `needs:` tails. Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix; at review, normalize Progress to outcome records (strip timestamped/narrative lines). Workers self-claim - don't assign or track them.
-   - **Worker actions**: Check `needs:` in board order and claim one eligible task from Open or Pending fix (no INDEX mark); when a dependency is unmet or unverified, name the wait and take the next eligible line. Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review.
+   - **Worker actions**: Check `needs:` in board order and claim one eligible task from Open or Pending fix (no INDEX mark); when a dependency is unmet or unverified, name the wait and take the next eligible line. Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review. Your responsibility for this task ends at submission; self-checks or checks by other agents do not authorize you to write its Review or move it to Done.
 3. **Write discipline.** csm files orient the next agent - don't duplicate what git already records. Default to not writing; before writing, ask: \"will the next agent need this to orient, claim, or review?\" If not, skip it.
 4. **Before you stop:** leave the files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: reviewed INDEX lines moved.
 5. **Cross-repo:** the same session name in each repo shares one `state.md` + `tasks/`. Reference the name in commits/PRs.
@@ -72,8 +72,12 @@ mod tests {
         assert!(block.contains("Coordinator"));
         assert!(block.contains("Worker"));
         assert!(!block.contains("Orchestrator"));
-        // Role is action-derived, not a fixed identity.
+        // Roles can vary across tasks; executing a task does not authorize its review.
         assert!(block.contains("Role follows action"));
+        assert!(block.contains("One agent can serve both roles on different tasks"));
+        assert!(block.contains("Your responsibility for this task ends at submission"));
+        assert!(block.contains("do not authorize you to write its Review or move it to Done"));
+        assert!(!block.contains("do whichever the current step needs"));
         assert!(!block.contains("Know your role"));
         // Coordinator creates (Scope+AC+SOP) + reviews; worker executes the SOP + submits.
         assert!(block.contains("Create tasks in Open"));
@@ -116,7 +120,8 @@ mod tests {
         assert!(block.contains("a simple fix may need only a one-line SOP"));
         assert!(block.contains("execute and review without reconstructing the design"));
         // The floor that never scales away.
-        assert!(block.contains("A verifiable AC and the local review are never skipped"));
+        assert!(block.contains("Every task has verifiable AC"));
+        assert!(!block.contains("the local review are never skipped"));
         assert!(block.contains("Open questions is filled when there is something to say"));
         // Orientation resumes the existing plan; planning and scouting are
         // on-demand, not a continuation ritual.

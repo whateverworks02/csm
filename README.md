@@ -56,20 +56,20 @@ A task's preconditions live on its board line as a `needs:` tail - the single de
 
 ## Task lifecycle
 
-Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can do both in a session.
+Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can serve both roles on different tasks; a worker submits its own work for coordinator review.
 
 A normal continuation resumes the plan already on the board: planning (`/csm-plan`) starts on a real planning need - a new mission, or a decision that would change the plan and can't be settled from what's recorded - and scouting (`/csm-scout`) runs around a specific question whose answer needs the code.
 
 1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP` sized to the task; add its line under `Open` at its execution position (next free id, wherever it slots) with its `needs:` tail when it has real preconditions.
 2. **Claim & execute** (worker): pick from `Open` or `Pending fix` whose `needs:` hold; execute the `SOP`, recording outcomes in `Progress`.
-3. **Submit** (worker): done or stuck - if stuck, add an `Open questions` bullet first; move the INDEX line to `Pending review`.
+3. **Submit** (worker): done or stuck - if stuck, add an `Open questions` bullet first; move the INDEX line to `Pending review`. The worker's responsibility for this task ends here; self-checks or checks by other agents do not authorize the worker to write its `Review` or move it to `Done`.
 4. **Review** (coordinator): approve -> `Done`; or write `Review` + answer `Open questions` -> `Pending fix`.
 
 `state.md` and `tasks/INDEX.md` are the orientation surface - injected into the agent on launch. Per-task files carry the detail; `notes/` and `scripts/` carry reusable knowledge.
 
 ### Scaling the record to the task
 
-Every task keeps the same six sections and the same lifecycle; only the depth changes. A verifiable `AC` and the local review are never skipped - `Open questions` carries content only when there is something to say.
+Every task keeps the same six sections and the same lifecycle; only the depth changes. Every task has verifiable `AC`; `Open questions` carries content only when there is something to say.
 
 A simple fix - one behavior, no handoff - shown after review:
 
