@@ -58,7 +58,9 @@ A task's preconditions live on its board line as a `needs:` tail - the single de
 
 Roles are action-derived, not assigned: creating or reviewing a task is a coordinator action; claiming or executing one is a worker action. One agent can serve both roles on different tasks; a worker submits its own work for coordinator review.
 
-A normal continuation resumes the plan already on the board: planning (`/csm-plan`) starts on a real planning need - a new mission, or a decision that would change the plan and can't be settled from what's recorded - and scouting (`/csm-scout`) runs around a specific question whose answer needs the code.
+A normal continuation resumes the plan already on the board. When the record can't support the next step of the task at hand - a task still `Open` while the repo already shows its work, `Progress` recording a result nothing verifies - the agent checks just the evidence that step depends on, then says what is confirmed, what remains, what is unknown, and the next action. An interruption alone triggers no check. Claims leave no board mark: another worker's activity is unknowable, so a real ambiguity is a question for the user rather than a takeover, and work the agent did not do stays in place.
+
+Planning (`/csm-plan`) starts on a real planning need - a new mission, or a decision that would change the plan and can't be settled from what's recorded - and scouting (`/csm-scout`) runs around a specific question whose answer needs the code.
 
 1. **Create** (coordinator): write `tasks/<id>-<slug>.md` with `Scope` + `AC` + `SOP` sized to the task; add its line under `Open` at its execution position (next free id, wherever it slots) with its `needs:` tail when it has real preconditions.
 2. **Claim & execute** (worker): pick from `Open` or `Pending fix` whose `needs:` hold; execute the `SOP`, recording outcomes in `Progress`.
@@ -127,8 +129,8 @@ Board line: `- 007 batch-retry - v2 with v1 fallback needs: api-contract/012 [v2
 
 `csm init` ships two skills - the authoring discipline at the pipeline's two variance-prone handoffs:
 
-- **csm-plan** (architect pass): for a new mission or a replan - grill the human in one batch on the questions that would change the plan (each names the decision, the options, and what breaks under each; a pass with none asks none), write the `state.md` one-pager, decompose into tasks whose `SOP`s are sized to the work (see [Scaling the record](#scaling-the-record-to-the-task)).
-- **csm-scout** (scout pass): for a specific open question whose answer needs the code - explore to answer questions, not to tour files - one note per question with `path:line` evidence, claims marked read vs inferred, unknowns listed as `open:` (they are grill material, not failure), options reported but never picked.
+- **csm-plan** (architect pass): for a new mission or a replan - resolve the decisions that affect the plan, investigating missing facts with targeted code reads and asking the user for the choices that need their judgment (grouped, with options and tradeoffs), update the `state.md` one-pager, and decompose into tasks with verifiable outcomes, `needs:` tails, and `SOP`s sized to the work (see [Scaling the record](#scaling-the-record-to-the-task)).
+- **csm-scout** (scout pass): for a specific open question whose answer needs the code - frame the decision it informs, read the files that can supply the evidence rather than touring the tree, and record the findings in the relevant note (or a new one): the answer with `path:line` evidence, observations distinguished from inferences, and specific unknowns with the evidence they need (material for the planning pass, not failure).
 
 Claude gets both as real skills - `/csm-plan`, `/csm-scout`, auto-triggered - and opencode auto-loads that same `~/.claude/skills/` directory as external skills, so it reads them with no separate deployment. Vendor-neutral copies live at `~/.csm/skills/plan.md` and `~/.csm/skills/scout.md`. Update loop is the same as the prompt: upgrade csm, rerun `csm init`.
 

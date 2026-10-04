@@ -27,10 +27,10 @@ A csm session is active iff `$CSM_SESSION` is set. Orient on `state.md` + `tasks
 
 ### Working mode
 
-1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`. Resume the recorded plan. Plan when the mission or approach needs to change; investigate when a specific unanswered question requires code evidence.
+1. **Orient.** Read `state.md` (Context), `tasks/INDEX.md` (Open + Pending fix are claimable; Pending review awaits the coordinator; Done is skimmable); skim `notes/INDEX.md`. Resume the recorded plan; when the record can't support the next step of the task at hand - a task still Open while the repo already shows its work, Progress recording a result nothing verifies - check just the evidence that step depends on, then state what is confirmed, what remains, what is unknown, and the next action. Interruption alone triggers no check. Claims leave no board mark, so another worker's activity is unknowable: on real ambiguity ask before claiming, and leave work you did not do in place. Plan when the mission or approach needs to change; investigate when a specific unanswered question requires code evidence.
 2. **Role follows action.** Creating or reviewing a task = coordinator (touch `state.md`, `notes/`, `scripts/`, the board). Claiming or executing a task = worker (touch only that task's file + your own INDEX line). One agent can serve both roles on different tasks; a worker submits its own work for coordinator review.
    - **Coordinator actions**: maintain `state.md`, `notes/`, `scripts/`. Create tasks in Open (write Scope + AC + SOP in the task file - the procedure is part of the design) with their `needs:` tails. Review Pending review -> approve to Done, or write Review + answer Open questions -> Pending fix; at review, normalize Progress to outcome records (strip timestamped/narrative lines). Workers self-claim - don't assign or track them.
-   - **Worker actions**: Check `needs:` in board order and claim one eligible task from Open or Pending fix (no INDEX mark); when a dependency is unmet or unverified, name the wait and take the next eligible line. Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review. Your responsibility for this task ends at submission; self-checks or checks by other agents do not authorize you to write its Review or move it to Done.
+   - **Worker actions**: Check `needs:` in board order and claim one eligible task from Open or Pending fix; when a dependency is unmet or unverified, name the wait and take the next eligible line. Execute its SOP, recording outcomes in the task file's Progress section; raise Open questions if stuck. Submit (done or stuck) by moving your own INDEX line to Pending review. Your responsibility for this task ends at submission; self-checks or checks by other agents do not authorize you to write its Review or move it to Done.
 3. **Write discipline.** csm files orient the next agent - don't duplicate what git already records. Default to not writing; before writing, ask: \"will the next agent need this to orient, claim, or review?\" If not, skip it.
 4. **Before you stop:** leave the files pick-up-ready - worker: task file complete + INDEX line at Pending review; coordinator: reviewed INDEX lines moved.
 5. **Cross-repo:** the same session name in each repo shares one `state.md` + `tasks/`. Reference the name in commits/PRs.
@@ -129,6 +129,26 @@ mod tests {
         assert!(block.contains("Plan when the mission or approach needs to change"));
         assert!(block
             .contains("investigate when a specific unanswered question requires code evidence"));
+    }
+
+    #[test]
+    fn csm_block_gates_continuation_on_evidence() {
+        let block = csm_block("/home/user/.csm");
+        // The trigger is a record that can't support the next step, not the
+        // interruption itself.
+        assert!(block.contains("when the record can't support the next step"));
+        assert!(block.contains("Interruption alone triggers no check"));
+        // The check is bounded to what the next step depends on, and the
+        // report separates confirmed from unknown.
+        assert!(block.contains("check just the evidence that step depends on"));
+        assert!(block.contains("state what is confirmed, what remains, what is unknown"));
+        // Claims leave no trace, so a live worker is unknowable: ask, don't
+        // take over, and don't touch work that isn't yours.
+        assert!(block.contains("Claims leave no board mark"));
+        assert!(block.contains("on real ambiguity ask before claiming"));
+        assert!(block.contains("leave work you did not do in place"));
+        // The worker bullet's "(no INDEX mark)" is retired into the line above.
+        assert!(!block.contains("no INDEX mark"));
     }
 
     #[test]
