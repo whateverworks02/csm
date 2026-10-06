@@ -193,10 +193,9 @@ pub fn build_view(
         .enumerate()
         .map(|(i, e)| (e.id.as_str(), i))
         .collect();
-    let live = |e: &Entry| e.status != Status::Done;
-    let has_live_needs = entries
-        .iter()
-        .any(|e| live(e) && (!e.needs.refs.is_empty() || e.needs.unparseable.is_some()));
+    let has_live_needs = entries.iter().any(|e| {
+        e.status.is_unfinished() && (!e.needs.refs.is_empty() || e.needs.unparseable.is_some())
+    });
     if !has_live_needs {
         return None;
     }
@@ -206,7 +205,7 @@ pub fn build_view(
     let mut needs_lines = Vec::new();
     let mut ready: Vec<&str> = Vec::new();
     for e in &entries {
-        if !live(e) {
+        if !e.status.is_unfinished() {
             continue;
         }
         let claimable = matches!(e.status, Status::Open | Status::PendingFix);

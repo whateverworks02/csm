@@ -127,6 +127,34 @@ pub fn confirm(msg: &str) -> Result<bool> {
     Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
+// --- Session table rows -------------------------------------------------------
+
+/// One session-table row - the single layout every session list shares (gc's
+/// collectable and kept blocks, the session picker). `index` is the 1-based
+/// selection handle; `None` leaves the column blank for a row nothing can
+/// select. `marker` is the caller's trailing note, spacing included (gc's
+/// `(N unfinished)`, the picker's pin mark).
+pub fn session_row(
+    index: Option<usize>,
+    name: &str,
+    last_access: &str,
+    origin: &str,
+    marker: &str,
+) -> String {
+    let index = match index {
+        Some(i) => format!("{:>2}", i),
+        None => "  ".to_string(),
+    };
+    format!(
+        "  {}  {}  {}  {}{}",
+        epaint(DIM, &index),
+        epaint(CYAN_BOLD, &format!("{:<20}", name)),
+        epaint(DIM, &format!("{:<16}", last_access)),
+        epaint(DIM, &abbrev_home(origin)),
+        marker
+    )
+}
+
 // --- Path helpers -----------------------------------------------------------
 
 /// Replace a leading `$HOME` with `~` for display. Falls back to the raw

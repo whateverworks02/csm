@@ -93,7 +93,8 @@ enum Cmd {
         name: Option<String>,
     },
 
-    /// Garbage-collect unpinned sessions.
+    /// Garbage-collect unpinned sessions; sessions whose board still holds
+    /// unfinished tasks are kept.
     Gc {
         /// Delete unpinned sessions not accessed in the last N days.
         #[arg(long, value_name = "N")]
@@ -332,19 +333,20 @@ fn pick_session(
     rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
     eprintln!("{}:", ui::epaint(ui::BOLD, label));
     for (i, (name, m)) in rows.iter().enumerate() {
-        let last = store::format_ts(&m.last_access);
         let pin = if m.pinned {
             format!(" {}", ui::epaint(ui::YELLOW, ui::PIN_MARK))
         } else {
             String::new()
         };
         eprintln!(
-            "  {}  {}  {}  {}{}",
-            ui::epaint(ui::DIM, &format!("{:>2}", i + 1)),
-            ui::epaint(ui::CYAN_BOLD, &format!("{:<20}", name)),
-            ui::epaint(ui::DIM, &format!("{:<16}", last)),
-            ui::epaint(ui::DIM, &ui::abbrev_home(&m.origin_pwd)),
-            pin,
+            "{}",
+            ui::session_row(
+                Some(i + 1),
+                name,
+                &store::format_ts(&m.last_access),
+                &m.origin_pwd,
+                &pin
+            )
         );
     }
     eprint!(

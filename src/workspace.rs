@@ -135,6 +135,12 @@ impl Status {
             Status::Done => "Done",
         }
     }
+
+    /// The live-work predicate: every status but Done. `needs`' ready view and
+    /// `gc`'s guardrail share it, so "not yet finished" has one home.
+    pub fn is_unfinished(self) -> bool {
+        !matches!(self, Status::Done)
+    }
 }
 
 impl TasksBoard {
@@ -147,6 +153,15 @@ impl TasksBoard {
             (&self.pending_fix, Status::PendingFix),
             (&self.done, Status::Done),
         ]
+    }
+
+    /// Number of entries not yet Done (Open + Pending review + Pending fix).
+    pub fn unfinished_count(&self) -> usize {
+        self.sections()
+            .iter()
+            .filter(|(_, status)| status.is_unfinished())
+            .map(|(entries, _)| entries.len())
+            .sum()
     }
 
     /// Status of board entry `id` across all sections; `None` when absent.
@@ -335,7 +350,7 @@ mod tests {
         read_tasks_index_md,
     };
     use crate::store::{session_dir, touch_session};
-    use crate::test_support::with_csm_home;
+    use crate::test_support::{with_csm_home, write_board};
     use serial_test::serial;
     use std::fs;
     use std::path::Path;
@@ -530,6 +545,20 @@ mod tests {
     }
 
     #[test]
+    fn unfinished_count_sums_every_live_section() {
+        let board = parse_tasks_board(
+            "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
+             ## Pending fix\n- 003 c\n- 004 d\n\n## Done\n- 000 e\n",
+        );
+        assert_eq!(board.unfinished_count(), 4);
+        assert_eq!(
+            parse_tasks_board("## Done\n- 000 e\n").unfinished_count(),
+            0
+        );
+        assert_eq!(parse_tasks_board("## Open\n").unfinished_count(), 0);
+    }
+
+    #[test]
     fn status_of_finds_entries_across_sections() {
         use super::Status;
         let board = parse_tasks_board("## Open\n- 001 a needs: 002\n\n## Done\n- 002 b - x\n");
@@ -564,12 +593,11 @@ mod tests {
         with_csm_home(|_dir| {
             let meta = touch_session("ws", "/o").unwrap();
             ensure_workspace("ws", &meta).unwrap();
-            fs::write(
-                session_dir("ws").unwrap().join("tasks/INDEX.md"),
-                "# ws - tasks board\n\n## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
-                 ## Pending fix\n- 003 c\n\n## Done\n- 000 d\n",
-            )
-            .unwrap();
+            write_board(
+                "ws",
+                "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n## Pending fix\n- 003 c\n\n\
+                 ## Done\n- 000 d\n",
+            );
             let board = read_tasks_board("ws").expect("parsed");
             assert_eq!(board.open.len(), 1);
             assert_eq!(board.pending_review.len(), 1);
