@@ -191,7 +191,7 @@ cso() { csm "$@" -a opencode }
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
 | `csm rename <old> <new>` | Rename and re-home to the current directory |
 | `csm rm <name>` | Delete a session and its workspace |
-| `csm gc [--older-than N]` | Garbage-collect unpinned sessions |
+| `csm gc [--older-than N]` | Garbage-collect unpinned sessions (sessions with unfinished board tasks are kept) |
 | `csm doctor [--fix]` | Diagnose and repair consistency |
 
 `show` and `detail` default to `$CSM_SESSION`, else open a picker. `csm init` (run by the installer) installs the hook, the prompt, and the csm skills - rerun it after upgrading csm.

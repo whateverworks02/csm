@@ -101,3 +101,14 @@ pub(crate) fn scaffold_session(name: &str) -> store::SessionMeta {
     workspace::ensure_workspace(name, &meta).unwrap();
     meta
 }
+
+/// Overwrite `name`'s board (`tasks/INDEX.md`) with `body` - the `## Section`
+/// text under the standard board header - so a test can place entries on a
+/// board. `#[serial]` (mutates `$CSM_HOME`).
+pub(crate) fn write_board(name: &str, body: &str) {
+    std::fs::write(
+        store::session_dir(name).unwrap().join("tasks/INDEX.md"),
+        format!("# {name} - tasks board\n\n{body}"),
+    )
+    .unwrap();
+}
