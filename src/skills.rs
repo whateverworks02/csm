@@ -60,7 +60,7 @@ Investigate specific open questions and record evidence the planning pass can us
 ## Steps
 
 1. **Frame the question.** Identify the decision the requested investigation informs and the evidence needed to answer it. Read the files that can supply that evidence; finish when the question is answered or the missing evidence is identified.
-2. **Record the findings.** Update the relevant note, or create one when the question has no existing home. Give the answer, locatable evidence (`path:line` for code claims), and relevant alternatives and tradeoffs. Distinguish observations from inferences; state specific unknowns and the evidence needed to resolve them. The reader can trace each consequential claim to its basis and distinguish options from chosen decisions.
+2. **Record the findings.** Update the relevant note, or create one when the question has no existing home; when the findings change an earlier conclusion, amend that conclusion where it lives. Give the answer, locatable evidence (`path:line` for code claims), and relevant alternatives and tradeoffs; where a later task will reuse a conclusion, record the premise it rests on. Distinguish observations from inferences - the mark records where a claim came from, not that it still holds - and state specific unknowns and the evidence needed to resolve them. The reader can trace each consequential claim to its basis and distinguish options from chosen decisions.
 3. **Register.** Update the note's one-line gist in `notes/INDEX.md` so the findings can be located.
 4. **Done when:** each question in this investigation is answered with evidence or has an explicit evidence gap, and the findings are registered.
 
@@ -257,8 +257,27 @@ mod tests {
             assert!(PLAN_SKILL_MD.contains("existing tasks retain their status"));
             assert!(!PLAN_SKILL_MD.contains("every INDEX line sits under Open"));
             assert!(!PLAN_SKILL_MD.contains("marked uncertain"));
+            // The targeted-verification entry stays open: code reads are not
+            // restricted to load-bearing note claims (the pre-010 rule).
+            assert!(!PLAN_SKILL_MD.contains("read code only for"));
+            // The pre-010 "notes are the architect's only eyes on the code"
+            // rule stays retired: scout reads the code that supplies evidence.
+            assert!(!SCOUT_SKILL_MD.contains("only eyes on the code"));
             assert!(!SCOUT_SKILL_MD.contains("trust blindly"));
             assert!(SCOUT_SKILL_MD.contains("each question in this investigation"));
+        }
+
+        #[test]
+        fn scout_amends_conclusions_in_place_and_records_premises() {
+            // A conclusion that changes is corrected where it lives; the
+            // failure-mode detail ("not a new note beside it") is the
+            // prompt's use-time rule, not restated here.
+            assert!(SCOUT_SKILL_MD.contains("amend that conclusion where it lives"));
+            // A conclusion a later task will reuse carries the premise it rests
+            // on, so the use-time check has something to check against.
+            assert!(SCOUT_SKILL_MD.contains("record the premise it rests on"));
+            // Observation/inference marks record provenance, not validity.
+            assert!(SCOUT_SKILL_MD.contains("the mark records where a claim came from"));
         }
 
         #[test]
