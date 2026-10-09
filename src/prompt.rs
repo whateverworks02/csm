@@ -71,7 +71,6 @@ When evidence contradicts a user requirement, report the discrepancy and retain 
 
 **Cross-repo:** the same session name in each repo shares one state.md + tasks/.
 
-**Legacy:** if state.md has `## Task` and no `## Context`, maintain that session in the old format; do not force tasks/ on old work.
 {end}",
         begin = CSM_MARK_BEGIN,
         end = CSM_MARK_END,
@@ -325,7 +324,6 @@ mod tests {
         assert!(block.contains(
             "**Cross-repo:** the same session name in each repo shares one state.md + tasks/."
         ));
-        assert!(block.contains("**Legacy:** if state.md has `## Task` and no `## Context`, maintain that session in the old format; do not force tasks/ on old work."));
     }
 
     #[test]
