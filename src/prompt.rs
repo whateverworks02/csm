@@ -22,7 +22,7 @@ A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and
 
 Before acting, identify the work concerned, the action the user requested, and its endpoint. Keep three things separate:
 
-- **Process** - this block defines the csm workflow. A conflicting workflow rule in memory or habit is stale; correct that memory.
+- **Process** - this block defines the csm workflow and record boundaries. They are mandatory while a session is active; correct conflicting workflow rules in memory or habit.
 - **Mandate** - the user determines the requirements and authorizes the work. Earlier authorization remains valid for unfinished work within its scope and phase.
 - **Records** - files preserve plans, user decisions, facts, and results. Code and runs can correct recorded facts; they cannot change a user decision or grant permission.
 
@@ -50,7 +50,7 @@ Questions, reviews, and modifications belong to the task they concern. A new tas
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
 - `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed and reviewed locally; PR creation, CI, approval, and merge are not part of that status. Later code changes alone do not reopen a historical Done task; requested changes follow the table. Move a task's line between sections to change its status. Within a section, line order = execution order; ids are stable handles. A new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board alone carries the plan.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
-- `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. Progress records outcomes: what changed, where (files/PR), and what remains; never a timestamped diary. Status lives only in INDEX. Internal names and background stay in the task file, out of code, commits, and PRs.
+- `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. Progress records outcomes: what changed, where (files/PR), and what remains; never a timestamped diary. Status lives only in INDEX.
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
@@ -60,14 +60,16 @@ Before relying on a recorded conclusion, check its premise, only as far as neede
 
 When evidence contradicts a user requirement, report the discrepancy and retain the requirement until the user changes it. Correcting a factual record does not authorize a lifecycle transition; board moves follow the requested action in the table. Claims leave no board mark, so another worker's activity is unknowable: ask before claiming when there is real ambiguity, and leave work you did not do in place.
 
-**Writing records.** Write what the next agent needs to orient, execute, or review, without duplicating git or narrating each step. When work or an agreed design changes, update the record that carries it: task Scope/Progress or state.md Context. PR feedback and later changes still use the original task's records.
+**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions. When work or an agreed design changes, update the record that carries it: task Scope/Progress or state.md Context. Keep outcomes and remaining work sufficient to resume, without duplicating git or narrating each step. PR feedback and later changes still use the original task's records.
+
+**Project output.** Code, comments, branch names, commits, and PRs describe the project's behavior, technical rationale, and verification. Keep csm session identifiers, internal task IDs, workspace-note paths, and conversation attributions out of those artifacts. Explain decisions without requiring access to csm or the conversation. Record branch names, commit SHAs, and PR URLs in task Progress for traceability.
 
 **Record maintenance.** Roles describe these duties; they do not grant permission to enter a phase.
 
 - Coordinator - maintains state.md, notes, scripts, and the board; creates task Scope + AC + SOP, maintains dependencies, and writes Review. At review, normalize Progress to outcome records. Workers self-claim; do not assign or track them.
 - Worker - maintains the task file and its board line. Under an execution mandate, select from the authorized Open or Pending fix tasks in board order, checking `needs:`. Skip unmet or unverified dependencies only to another task within that mandate; otherwise report the wait. Execute the SOP, record outcomes in Progress, and raise Open questions if stuck. Submit at the execution endpoint in the table.
 
-**Cross-repo:** the same session name in each repo shares one state.md + tasks/. Reference the name in commits/PRs.
+**Cross-repo:** the same session name in each repo shares one state.md + tasks/.
 
 **Legacy:** if state.md has `## Task` and no `## Context`, maintain that session in the old format; do not force tasks/ on old work.
 {end}",
@@ -102,7 +104,7 @@ mod tests {
         // The block opens with the turn boundary and the three-way split.
         assert!(block.contains("### Turn boundary"));
         assert!(block.contains(
-            "**Process** - this block defines the csm workflow. A conflicting workflow rule in memory or habit is stale; correct that memory."
+            "**Process** - this block defines the csm workflow and record boundaries. They are mandatory while a session is active; correct conflicting workflow rules in memory or habit."
         ));
         assert!(block.contains(
             "**Mandate** - the user determines the requirements and authorizes the work."
@@ -240,10 +242,17 @@ mod tests {
             "Progress records outcomes: what changed, where (files/PR), and what remains; never a timestamped diary."
         ));
         assert!(block.contains("Status lives only in INDEX."));
-        // Task context stays private to the task.
+        // Session bookkeeping stays internal; public artifacts explain the work.
         assert!(block.contains(
-            "Internal names and background stay in the task file, out of code, commits, and PRs."
+            "Code, comments, branch names, commits, and PRs describe the project's behavior, technical rationale, and verification."
         ));
+        assert!(block.contains(
+            "Keep csm session identifiers, internal task IDs, workspace-note paths, and conversation attributions out of those artifacts."
+        ));
+        assert!(block.contains(
+            "Record branch names, commit SHAs, and PR URLs in task Progress for traceability."
+        ));
+        assert!(!block.contains("Reference the name in commits/PRs"));
         // state.md stays a one-pager.
         assert!(block.contains("Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`."));
         assert!(block.contains("**You maintain these files, not csm.**"));
@@ -306,14 +315,16 @@ mod tests {
         assert!(!block.contains("progress.md"));
         // Writing records: what the next agent needs; the sync never skipped.
         assert!(block.contains(
-            "**Writing records.** Write what the next agent needs to orient, execute, or review, without duplicating git or narrating each step."
+            "**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions."
         ));
         assert!(block.contains("When work or an agreed design changes, update the record that carries it: task Scope/Progress or state.md Context."));
         assert!(
             block.contains("PR feedback and later changes still use the original task's records.")
         );
         // Cross-repo and legacy semantics.
-        assert!(block.contains("**Cross-repo:** the same session name in each repo shares one state.md + tasks/. Reference the name in commits/PRs."));
+        assert!(block.contains(
+            "**Cross-repo:** the same session name in each repo shares one state.md + tasks/."
+        ));
         assert!(block.contains("**Legacy:** if state.md has `## Task` and no `## Context`, maintain that session in the old format; do not force tasks/ on old work."));
     }
 
