@@ -17,20 +17,7 @@
 //! set, same process) and re-injects `state.md` - reviving the workspace memory.
 //! Other agents (e.g. `pi`) inject at launch instead; see `agent.rs`.
 
-mod agent;
-mod doctor;
-mod gc;
-mod hook;
-mod inject;
-mod markdown;
-mod needs;
-mod prompt;
-mod skills;
-mod store;
-#[cfg(test)]
-mod test_support;
-mod ui;
-mod workspace;
+use csm::{agent, doctor, gc, hook, inject, markdown, needs, store, ui, workspace};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
