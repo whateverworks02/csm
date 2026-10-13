@@ -43,7 +43,9 @@ Plan, execute, review, and opening a PR are separate phases. At the endpoint in 
 | Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. Reopen submitted or Done work to Pending fix; implement and verify the requested change. A request limited to changing the plan ends after recording it | Revised plan recorded if that was the limit; otherwise the execution endpoint |
 | Authorize opening a PR after local review | Create the PR from the reviewed work and record its link in Progress | Link recorded |
 
-Questions, reviews, and modifications belong to the task they concern. A new task requires the user's confirmation of a separate, independently reviewable deliverable. Classify PR feedback by what it requests using the same table; its source does not itself authorize a change. The same agent may serve different phases on the same task.
+Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update, or the change rides an already-open PR whose review covers it - place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
+
+Questions, reviews, and modifications belong to the task they concern. A new task requires the user's confirmation of a separate, independently reviewable deliverable. That confirmation is permission, never an obligation: writing notes, organizing knowledge, and updating records within existing scope happen directly in those records, without a board line. Classify PR feedback by what it requests using the same table; its source does not itself authorize a change. The same agent may serve different phases on the same task.
 
 ### Records
 
@@ -178,6 +180,23 @@ mod tests {
             "Classify PR feedback by what it requests using the same table; its source does not itself authorize a change."
         ));
         assert!(block.contains("The same agent may serve different phases on the same task."));
+    }
+
+    #[test]
+    fn csm_block_defines_the_review_surface_and_the_task_gate() {
+        let block = csm_block("/home/user/.csm");
+        // The endpoint's escape conditions, as their own paragraph under the
+        // table: what the stop is for, the PR as review surface, artifact-free
+        // output, and the user's word as the status decision.
+        assert!(block.contains("Pending review is the stop for an unchecked diff or artifact."));
+        assert!(block.contains("or the change rides an already-open PR whose review covers it"));
+        assert!(block.contains("place the line where the work stands instead"));
+        assert!(block.contains("A user instruction that says where a line goes is the decision"));
+        assert!(block.contains("from the sole reviewer it is also the verdict"));
+        // The new-task sentence is a permission gate, never an obligation:
+        // record maintenance is handled in the records, not on the board.
+        assert!(block.contains("That confirmation is permission, never an obligation"));
+        assert!(block.contains("without a board line"));
     }
 
     #[test]
