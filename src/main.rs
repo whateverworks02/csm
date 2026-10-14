@@ -504,8 +504,9 @@ fn card_row(label: &str, value: &str) {
 
 /// Render a card row with one or more value lines: the first line carries the
 /// label, continuation lines indent under the value column. "(none)" when empty.
-/// Shared by the `context` row (truncated state.md lines) and the `open`/`done`
-/// task-entry rows so the label/continuation layout can't drift between them.
+/// Shared by the `context` row (truncated state.md lines) and the `tasks`
+/// block (summary bar + dependency forest + done line) so the
+/// label/continuation layout can't drift between them.
 fn card_multiline_row(label: &str, lines: &[String]) {
     let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
     if lines.is_empty() {
@@ -555,21 +556,23 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         .collect();
     card_multiline_row("context", &context_lines);
 
-    // tasks - the board is the operational center. The card lists Open (work to
-    // claim) and Done (accomplished) entries; Pending review/fix live on the
-    // full board (`csm detail`) - the card is a glance, not the whole board.
+    // tasks - the board is the operational center, rendered as one block:
+    // a summary bar, the dependency forest (live tasks as roots, their
+    // `needs:` tails as leaves - the one mapping the agents read, so the
+    // view cannot drift from the plan), and the dim done line. `claimable`
+    // turns the forest into a decision: what can be claimed now. An empty
+    // board keeps a dim `(none)`. Cross-session refs resolve against each
+    // foreign board, read at most once per session regardless of how many
+    // refs point into it.
     let board = workspace::read_tasks_board(&name).unwrap_or_default();
-    card_entries_row("open", &board.open);
-    card_entries_row("done", &board.done);
-
-    // needs - the dependency mapping, read straight from the board's `needs:`
-    // tails (the one mapping the agents read), so it cannot drift from the
-    // plan. One line per live task with refs; each line is also its wait
-    // reason. `ready` turns it into a decision: what can be claimed now.
-    // Dependency-free sessions show nothing here - the bare card stays.
-    // Cross-session refs resolve against each foreign board, read at most
-    // once per session regardless of how many refs point into it.
     let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
+    let mut lines: Vec<String> = Vec::new();
+    let total =
+        board.open.len() + board.pending_review.len() + board.pending_fix.len() + board.done.len();
+    if total > 0 {
+        lines.push(tasks_summary_line(&board));
+    }
+    let mut claimable = String::new();
     if let Some(view) = needs::build_view(&board, &name, &mut |s, t| {
         foreign
             .entry(s.to_string())
@@ -577,10 +580,15 @@ fn cmd_show(name: Option<String>) -> Result<()> {
             .as_ref()
             .and_then(|b| b.status_of(t))
     }) {
-        card_multiline_row("needs", &view.needs_lines);
-        if !view.ready_line.is_empty() {
-            card_row("ready", &view.ready_line);
-        }
+        lines.extend(view.tree_lines);
+        claimable = view.claimable_line;
+    }
+    if let Some(done) = tasks_done_line(&board) {
+        lines.push(done);
+    }
+    card_multiline_row("tasks", &lines);
+    if !claimable.is_empty() {
+        card_row("claimable", &claimable);
     }
 
     let scripts = workspace::list_scripts(&name);
@@ -591,25 +599,73 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Render a card row listing task entries (id + slug) for one board status.
-/// Up to `CAP` entries show; a dim `... +N more` line follows when there are
-/// more. The `id slug` head (gist and `needs:` tail dropped) comes from
-/// [`workspace::entry_head`], the one home of the entry-format rule. Layout
-/// (label, continuation indent, "(none)") is shared via [`card_multiline_row`].
-fn card_entries_row(label: &str, entries: &[String]) {
-    const CAP: usize = 3;
-    let mut lines: Vec<String> = entries
-        .iter()
-        .take(CAP)
-        .map(|raw| workspace::entry_head(raw).to_string())
-        .collect();
-    if entries.len() > CAP {
-        lines.push(ui::paint(
-            ui::DIM,
-            &format!("... +{} more", entries.len() - CAP),
-        ));
+/// Width of the progress bar in the `csm show` tasks summary.
+const TASKS_BAR_WIDTH: usize = 20;
+
+/// The `tasks` block's summary line: a 20-cell bar (filled = done share,
+/// rounded) plus `N/M done`, with `· K review` / `· K fix` counts when
+/// nonzero. Open needs no count - the roots below show it. Callers show a
+/// dim `(none)` instead when the board has no entries.
+fn tasks_summary_line(board: &workspace::TasksBoard) -> String {
+    let total =
+        board.open.len() + board.pending_review.len() + board.pending_fix.len() + board.done.len();
+    // checked_div: a total of 0 (empty board) yields 0 filled, not a panic.
+    let filled = (TASKS_BAR_WIDTH * board.done.len() + total / 2)
+        .checked_div(total)
+        .unwrap_or(0);
+    let mut s = format!("{} {}/{} done", tasks_bar(filled), board.done.len(), total);
+    if !board.pending_review.is_empty() {
+        s.push_str(&format!(" · {} review", board.pending_review.len()));
     }
-    card_multiline_row(label, &lines);
+    if !board.pending_fix.is_empty() {
+        s.push_str(&format!(" · {} fix", board.pending_fix.len()));
+    }
+    s
+}
+
+/// The summary bar's `[...]`: filled cells green, empty cells dim. A
+/// zero-width side is left unpainted - a bare SGR pair around nothing is
+/// escape noise on 0-done and all-done boards.
+fn tasks_bar(filled: usize) -> String {
+    let mut bar = String::from("[");
+    if filled > 0 {
+        bar.push_str(&ui::paint(ui::GREEN, &"█".repeat(filled)));
+    }
+    let empty = TASKS_BAR_WIDTH - filled;
+    if empty > 0 {
+        bar.push_str(&ui::paint(ui::DIM, &"░".repeat(empty)));
+    }
+    bar.push(']');
+    bar
+}
+
+/// Sort key for a board head: its leading id token, numerically when it
+/// parses - ids are not zero-padded, so text order would put `10` before
+/// `9`. Non-numeric ids sort after numeric ones, by text.
+fn head_id_key(head: &str) -> (Option<u64>, &str) {
+    let id = head.split_whitespace().next().unwrap_or("");
+    (id.parse().ok(), id)
+}
+
+/// The dim line closing the `tasks` block: `✓ done N · <id slug>, ...` -
+/// every done task (no cap; `csm detail` still shows the raw board), sorted
+/// by id for scanning. `None` when nothing is done yet.
+fn tasks_done_line(board: &workspace::TasksBoard) -> Option<String> {
+    if board.done.is_empty() {
+        return None;
+    }
+    let mut heads: Vec<&str> = board
+        .done
+        .iter()
+        .map(|e| workspace::entry_head(e))
+        .collect();
+    heads.sort_by(|a, b| head_id_key(a).cmp(&head_id_key(b)));
+    Some(format!(
+        "{} {} · {}",
+        ui::paint(ui::GREEN, ui::T_DONE),
+        ui::paint(ui::DIM, &format!("done {}", board.done.len())),
+        ui::paint(ui::DIM, &heads.join(", ")),
+    ))
 }
 
 /// Render a card row for a subdirectory listing: comma-joined names with a
@@ -815,5 +871,64 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown agent"), "{err}");
+    }
+
+    // --- tasks block summary / done line (color is off under test capture) ---
+
+    fn board(md: &str) -> workspace::TasksBoard {
+        workspace::parse_tasks_board(md)
+    }
+
+    #[test]
+    fn tasks_summary_line_bar_and_counts() {
+        let b = board(
+            "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
+             ## Pending fix\n- 003 c\n\n## Done\n- 000 d\n",
+        );
+        // 1/4 done -> round(20/4) = 5 filled; review + fix counts ride along.
+        assert_eq!(
+            tasks_summary_line(&b),
+            "[█████░░░░░░░░░░░░░░░] 1/4 done · 1 review · 1 fix"
+        );
+    }
+
+    #[test]
+    fn tasks_summary_line_full_and_empty_share() {
+        let all = board("## Done\n- 000 a\n- 001 b\n- 002 c\n");
+        assert_eq!(tasks_summary_line(&all), "[████████████████████] 3/3 done");
+        // Zero review/fix: no suffixes.
+        let none = board("## Open\n- 001 a\n- 002 b\n- 003 c\n");
+        assert_eq!(tasks_summary_line(&none), "[░░░░░░░░░░░░░░░░░░░░] 0/3 done");
+        // 2/6 done -> round(6.67) = 7 filled.
+        let two =
+            board("## Open\n- 002 a\n- 003 b\n- 004 c\n- 005 d\n\n## Done\n- 000 e\n- 001 f\n");
+        assert_eq!(tasks_summary_line(&two), "[███████░░░░░░░░░░░░░] 2/6 done");
+    }
+
+    #[test]
+    fn tasks_done_line_lists_all_sorted_by_id() {
+        let b = board("## Done\n- 004 d - gist\n- 001 a - gist\n- 002 b needs: 001\n");
+        assert_eq!(
+            tasks_done_line(&b).unwrap(),
+            "✓ done 3 · 001 a, 002 b, 004 d"
+        );
+        assert!(tasks_done_line(&board("## Open\n- 001 a\n")).is_none());
+    }
+
+    #[test]
+    fn tasks_done_line_sorts_numerically_by_id() {
+        // Ids are not zero-padded, so text order would put `10` before `9`;
+        // id order is numeric.
+        let b = board("## Done\n- 10 j - x\n- 9 i - x\n- 002 b - x\n");
+        assert_eq!(tasks_done_line(&b).unwrap(), "✓ done 3 · 002 b, 9 i, 10 j");
+    }
+
+    #[test]
+    fn tasks_bar_skips_zero_width_sides() {
+        // 0-done and all-done boards paint one side with nothing; the
+        // string still renders the full 20 cells either way.
+        assert_eq!(tasks_bar(0), "[░░░░░░░░░░░░░░░░░░░░]");
+        assert_eq!(tasks_bar(TASKS_BAR_WIDTH), "[████████████████████]");
+        assert_eq!(tasks_bar(7), "[███████░░░░░░░░░░░░░]");
     }
 }

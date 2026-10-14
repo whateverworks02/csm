@@ -103,11 +103,11 @@ pub fn read_tasks_index_md(name: &str) -> Option<String> {
 
 /// Per-status task entries parsed from `tasks/INDEX.md`. The board is the source
 /// of truth for what's claimable (Open / Pending fix) vs awaiting review
-/// (Pending review) vs done. `csm show` lists the Open and Done entries (the
-/// actionable and the accomplished) as a recognition aid; entries not listed in
-/// INDEX are invisible here - keep INDEX current. Each entry is the text after
-/// the leading `- ` (e.g. `001 fix-cookie-set - wire SameSite`); the card
-/// formats it to `id slug`.
+/// (Pending review) vs done. `csm show` renders the whole board as the tasks
+/// block (live tasks as forest roots, done as a dim line); entries not listed
+/// in INDEX are invisible there - keep INDEX current. Each entry is the text
+/// after the leading `- ` (e.g. `001 fix-cookie-set - wire SameSite`); the
+/// card formats it to `id slug`.
 #[derive(Default)]
 pub struct TasksBoard {
     pub open: Vec<String>,
@@ -116,8 +116,8 @@ pub struct TasksBoard {
     pub done: Vec<String>,
 }
 
-/// Board status of a task entry: the section it sits under. The label is the
-/// section title, so the parser, the card, and the needs view share one naming.
+/// Board status of a task entry: the section it sits under. The parser, the
+/// show tasks block, and the needs view share this one type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Open,
@@ -127,17 +127,8 @@ pub enum Status {
 }
 
 impl Status {
-    pub fn label(self) -> &'static str {
-        match self {
-            Status::Open => "Open",
-            Status::PendingReview => "Pending review",
-            Status::PendingFix => "Pending fix",
-            Status::Done => "Done",
-        }
-    }
-
-    /// The live-work predicate: every status but Done. `needs`' ready view and
-    /// `gc`'s guardrail share it, so "not yet finished" has one home.
+    /// The live-work predicate: every status but Done. `needs`' claimable
+    /// view and `gc`'s guardrail share it, so "not yet finished" has one home.
     pub fn is_unfinished(self) -> bool {
         !matches!(self, Status::Done)
     }
@@ -178,7 +169,7 @@ impl TasksBoard {
 }
 
 /// The `id slug` head of a board entry: the text before the `needs:` tail
-/// (which ends the line per the task-004 protocol) and before the ` - gist`
+/// (which ends the line per the `needs:` protocol) and before the ` - gist`
 /// separator. Shared by the card rows and the needs view so one format rule
 /// has one home.
 pub fn entry_head(entry: &str) -> &str {
@@ -226,7 +217,7 @@ pub fn parse_tasks_board(content: &str) -> TasksBoard {
 
 /// Read and parse task entries from `tasks/INDEX.md` for a session. `None` if
 /// the file is absent; `Some` of an empty board if it exists but has no entries
-/// (a fresh scaffold). Used by `csm show` to list Open/Done entries.
+/// (a fresh scaffold). Used by `csm show` to render the tasks block.
 pub fn read_tasks_board(name: &str) -> Option<TasksBoard> {
     read_tasks_index_md(name).map(|c| parse_tasks_board(&c))
 }

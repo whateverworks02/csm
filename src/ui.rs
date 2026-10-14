@@ -7,8 +7,11 @@
 //! hook uses raw `println!` anyway and never calls these helpers.
 //!
 //! Aesthetic: cargo-like restraint. Color, not icons - no checkmarks, stars,
-//! or bullets. Verbs and labels carry the meaning; paths and timestamps recede
-//! (dim, `~`-abbreviated). Errors use cargo's red `error:` prefix.
+//! or bullets. One exception: the `csm show` tasks block, whose dependency
+//! forest follows the `cargo tree` lineage and uses box-drawing connectors
+//! plus status glyphs (see `needs.rs`). Verbs and labels carry the meaning;
+//! paths and timestamps recede (dim, `~`-abbreviated). Errors use cargo's
+//! red `error:` prefix.
 
 use anyhow::Result;
 use std::io::IsTerminal;
@@ -21,8 +24,10 @@ use anstyle::{AnsiColor, Color, Style};
 
 pub const BOLD: Style = Style::new().bold();
 pub const DIM: Style = Style::new().dimmed();
+pub const CYAN: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
 pub const YELLOW: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 pub const GREEN: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+pub const MAGENTA: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta)));
 pub const GREEN_BOLD: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)));
@@ -40,6 +45,19 @@ pub const YELLOW_BOLD: Style = Style::new()
 pub const ARROW: &str = "->";
 /// ASCII marker for pinned sessions in tables. Plain text, not an icon.
 pub const PIN_MARK: &str = "*";
+
+/// Status glyphs for the `csm show` tasks block's dependency forest. Shape
+/// carries the status without color (NO_COLOR-safe); color is added by the
+/// caller. Not used anywhere else - the rest of csm output stays
+/// color-not-icons.
+pub const T_OPEN: &str = "○";
+pub const T_REVIEW: &str = "◐";
+pub const T_FIX: &str = "◑";
+pub const T_DONE: &str = "✓";
+/// A `needs:` ref the boards cannot resolve (missing id / unknown session).
+pub const T_UNKNOWN: &str = "?";
+/// A broken relation: self-need or an unparseable tail.
+pub const T_ALERT: &str = "!";
 
 // --- Color gate (per stream) ------------------------------------------------
 

@@ -208,7 +208,7 @@ cso() { csm "$@" -a opencode }
 | `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`, before or after the name) |
 | `csm [-a <agent>]` | Pick a session whose origin is the current directory, launch it with that agent (default `claude`) |
 | `csm list` | List all sessions |
-| `csm show [name]` | Compact card: context, tasks, needs, ready, scripts, notes |
+| `csm show [name]` | Compact card: context, task topology, claimable, scripts, notes |
 | `csm detail [name]` | Full `state.md` + task board render |
 | `csm init` | (Re)install the hook, the prompt, and the csm skills - rerun after upgrading |
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
@@ -221,16 +221,24 @@ cso() { csm "$@" -a opencode }
 
 ### Reading the plan in `csm show`
 
-The card reads the board's `needs:` tails directly, so the view is the plan the agents read - there is no second graph file to keep in sync, and a replan shows up on the next `show`. One line per live task with refs; `ready` lists what can be claimed now (`Open` and `Pending fix` whose refs all hold):
+The tasks block reads the board's `needs:` tails directly, so the view is the plan the agents read - there is no second graph file to keep in sync, and a replan shows up on the next `show`. Live tasks (Open, then Pending review, then Pending fix) are the roots of a `cargo tree`-style forest; each task's needs hang below it as leaves, so every wait is visible in place. `claimable` lists what can be claimed now (`Open` and `Pending fix` whose refs all hold):
 
 ```text
-  needs       002 api (Open) needs 001 contract (Done)
-              003 frontend (Open) needs 001 contract (Done)
-              004 e2e (Open) needs 002 api (Open), 003 frontend (Open)
-  ready       002, 003
+  tasks       [███████░░░░░░░░░░░░░] 2/6 done
+              ├── ○ 002 eval-grader
+              │   └── ✓ 001 eval-runner
+              ├── ○ 003 incident-corpus
+              │   └── ○ 002 eval-grader
+              ├── ○ 004 judge-layer
+              │   └── ○ 002 eval-grader
+              └── ○ 005 baseline-and-gate
+                  ├── ○ 003 incident-corpus
+                  └── ○ 004 judge-layer
+              ✓ done 2 · 001 eval-runner, 006 prompt-surface-patch
+  claimable   002
 ```
 
-A line is also its wait reason: 004 is blocked because the refs it names are still `(Open)`. Long dependency lines wrap in the terminal so every ref, status, and condition remains visible. A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `api-contract/012 (Done) [interface PR merged] (unverified)`. Retained conditions always require checking in this view; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `(missing)` / `(unknown)` instead of satisfied. A dependency cycle is called out with a `warning:` line. Sessions with no `needs:` tails keep the plain card.
+Glyphs carry status: `○` open, `◐` pending review, `◑` pending fix, `✓` done. A live task is expanded only at its own root - under another task it is a single leaf (005 waits on 003 and 004, both open; 003 and 004 wait on 002). A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `✓ api-contract/012 [interface PR merged] (unverified)`; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `? ... (missing)` / `? ... (unknown)`; a broken tail or a self-need shows `!`; a dependency cycle is called out with one `warning:` line (the forest itself never recurses). Done tasks close the block as one dim line - the full list, sorted by id. Boards without `needs:` tails render the roots as a plain list.
 
 ## License
 
