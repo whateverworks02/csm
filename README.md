@@ -22,14 +22,16 @@ Each session is a directory at `~/.csm/sessions/<name>/`:
 │   ├── INDEX.md
 │   └── <id>-<slug>.md
 ├── notes/
+├── views/
 └── scripts/
 ```
 
 - **`state.md`** - the session one-pager. Sections: `Context` (what this session is and why), `Key links` (repo, docs, related sessions). Read on every launch to recall what the session is about.
 - **`tasks/INDEX.md`** - the task board. Sections are statuses - `Open` -> `Pending review` -> `Pending fix` -> `Done` - and a task's status is which section its line is in. The operational center: what's claimable, what's under review, what's done. `Done` means the local loop closed - executed and reviewed locally; PR creation, CI, approval, and merge are not part of that status. Later code changes alone do not reopen a historical `Done` task; a requested change follows the request table in [Task lifecycle](#task-lifecycle). Within a section, line order = execution order: ids are stable handles, so replanning re-slots lines (reorder/insert/split/drop) instead of renumbering, and the board - not chat - carries the plan. A task's preconditions ride on the same line as a `needs:` tail (see [Dependencies](#dependencies)) - the only dependency mapping, with no second graph file to maintain.
-- **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The same sections serve every task, scaled to its size (see [Scaling the record](#scaling-the-record-to-the-task)). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`.
-- **`notes/`** - focused deep-dive articles that outlive a single task; `notes/INDEX.md` is the registry.
-- **`scripts/`** - shared utility scripts; `scripts/INDEX.md` is the registry.
+- **`tasks/<id>-<slug>.md`** - one file per task. Sections: `Scope` (what), `AC` (acceptance criteria), `SOP` (the procedure), `Open questions` (blockers - worker raises, coordinator answers), `Progress` (outcome records: what changed, where - files/PR - and what's left; never a timestamped diary), `Review` (coordinator feedback). The same sections serve every task, scaled to its size (see [Scaling the record](#scaling-the-record-to-the-task)). The coordinator writes `Scope` + `AC` + `SOP` at create and `Review` at review; the worker executes the `SOP` and appends to `Progress`. Two optional header lines sit under the file's title, omitted when unused: `References: <slug>[, <slug>]` names the `notes/` articles the task rests on - bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews, carrying the why (design rationale, provenance, adjudications) while the executable what stays in `Scope`/`AC`/`SOP` - and `View: <id>-<slug>.html` points at the task's view under `views/`. The coordinator sets them when creating the task; a worker adds one it writes or discovers. Read-side only: neither line gates claiming, which the `needs:` tail alone owns.
+- **`notes/`** - focused deep-dive articles that outlive a single task, entered through `notes/INDEX.md` - one gist line per article, describing the article alone. Which tasks rest on a note lives in those tasks' `References:` lines, so the registry never enumerates task ids.
+- **`views/`** - human-facing task views: one self-contained HTML file per view-warranted task at `views/<id>-<slug>.html`, entered through `views/INDEX.md`. A view renders its task and notes for a human reader - the current-state problem, the proposed logic change, the before/after flow - and adds layout, never facts: any fact the page needs lives in `notes/` first, and where a view and a note disagree, the note wins. Warranted only when a task's substance is a logic change a human must judge as a whole - data flow, lifecycle or routing rules, state machine, interface contract, comparison semantics, or a current-state problem that has to be shown; a sentence-level or mechanical fix, corpus building, and record upkeep warrant none.
+- **`scripts/`** - shared utility scripts, entered through `scripts/INDEX.md`.
 
 ### Dependencies
 
@@ -208,7 +210,7 @@ cso() { csm "$@" -a opencode }
 | `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`, before or after the name) |
 | `csm [-a <agent>]` | Pick a session whose origin is the current directory, launch it with that agent (default `claude`) |
 | `csm list` | List all sessions |
-| `csm show [name]` | Compact card: context, task topology, claimable, scripts, notes |
+| `csm show [name]` | Compact card: context, task forest (with a `◇` on each task that has a view), claimable |
 | `csm detail [name]` | Full `state.md` + task board render |
 | `csm init` | (Re)install the hook, the prompt, and the csm skills - rerun after upgrading |
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
@@ -229,16 +231,16 @@ The tasks block reads the board's `needs:` tails directly, so the view is the pl
               │   └── ✓ 001 eval-runner
               ├── ○ 003 incident-corpus
               │   └── ○ 002 eval-grader
-              ├── ○ 004 judge-layer
+              ├── ○ 004 judge-layer ◇
               │   └── ○ 002 eval-grader
               └── ○ 005 baseline-and-gate
                   ├── ○ 003 incident-corpus
-                  └── ○ 004 judge-layer
+                  └── ○ 004 judge-layer ◇
               ✓ done 2 · 001 eval-runner, 006 prompt-surface-patch
   claimable   002
 ```
 
-Glyphs carry status: `○` open, `◐` pending review, `◑` pending fix, `✓` done. A live task is expanded only at its own root - under another task it is a single leaf (005 waits on 003 and 004, both open; 003 and 004 wait on 002). A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `✓ api-contract/012 [interface PR merged] (unverified)`; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `? ... (missing)` / `? ... (unknown)`; a broken tail or a self-need shows `!`; a dependency cycle is called out with one `warning:` line (the forest itself never recurses). Done tasks close the block as one dim line - the full list, sorted by id. Boards without `needs:` tails render the roots as a plain list.
+Glyphs carry status: `○` open, `◐` pending review, `◑` pending fix, `✓` done. A `◇` after a task's label marks a task that has a view in `views/` - on its forest root, on its leaf under another task, and on the done line - so `004` shows one in both places; a task without a view shows nothing. The card renders no `notes/` or `scripts/` rows: those corpora are read through their `INDEX.md` files, and a note's filename alone says nothing about what it holds. A live task is expanded only at its own root - under another task it is a single leaf (005 waits on 003 and 004, both open; 003 and 004 wait on 002). A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `✓ api-contract/012 [interface PR merged] (unverified)`; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `? ... (missing)` / `? ... (unknown)`; a broken tail or a self-need shows `!`; a dependency cycle is called out with one `warning:` line (the forest itself never recurses). Done tasks close the block as one dim line - the full list, sorted by id. Boards without `needs:` tails render the roots as a plain list.
 
 ## License
 
