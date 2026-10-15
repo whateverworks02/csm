@@ -1,22 +1,24 @@
-//! Dependency view for `csm show`: render the board's `needs:` tails (task
-//! 004) for the user. The tails are the single dependency mapping; this module
-//! reads them straight from the parsed board - no second graph file, no
-//! cache - so the picture cannot drift from the plan the agents read.
+//! Tasks-block view for `csm show`: render the board's `needs:` tails as a
+//! dependency forest. The tails are the single dependency mapping;
+//! this module reads them straight from the parsed board - no second graph
+//! file, no cache - so the picture cannot drift from the plan the agents read.
 //!
-//! The view is one line per live (non-Done) task that carries refs:
-//! `004 e2e (Open) needs 002 api (Open), 003 frontend (Done)` - plus the
-//! ready set (claimable tasks whose needs all hold). The line is the wait
-//! reason: an unmet ref shows its real status, a `[condition]` is never
-//! assumed met, and anomalies are marked at the relation they break
-//! (`(missing)`, `(unknown)`, `needs itself`, an unparseable tail) - never
-//! rendered as satisfied. A dependency cycle gets one explicit `warning:`
-//! line. Sessions with no live `needs:` tail keep the bare card.
+//! The forest follows the `cargo tree` lineage: every live task (Open, then
+//! Pending review, then Pending fix - board order) is a root; its needs hang
+//! below as leaves. A live task is expanded only at its own root - under
+//! another task it is a single leaf - so no subtree repeats and a cycle
+//! cannot recurse. Status rides on glyphs (`○` `◐` `◑` `✓`); anomalies are
+//! marked at the relation they break (`? ... (missing)` / `(unknown)`,
+//! `! itself`, `! unparseable tail`, a `warning:` cycle line) - never
+//! rendered as satisfied. `claimable` lists the Open / Pending fix tasks
+//! whose refs all hold; a `[condition]` is never assumed met. Boards with
+//! no live task keep the bare card (summary + done line only).
 
 use crate::ui;
 use crate::workspace::{entry_head, entry_id, Status, TasksBoard};
 use std::collections::HashMap;
 
-// --- needs-tail parsing (the board's dependency mapping, task 004) ----------
+// --- needs-tail parsing (the board's dependency mapping) ---------------------
 
 /// One `needs:` reference: `<task-id>` (same session) or `<session>/<task-id>`
 /// (cross-session boundary). A trailing `[...]` is a delivery condition that
@@ -167,21 +169,161 @@ fn collect_entries(board: &TasksBoard) -> Vec<Entry> {
     out
 }
 
-/// The rendered `needs` block of the `csm show` card.
+/// The rendered tasks block of the `csm show` card.
 pub struct DepView {
-    /// One line per live task carrying refs, plus a cycle warning when the
-    /// tails loop. Every edge and condition stays spelled out.
-    pub needs_lines: Vec<String>,
-    /// Comma-joined ids of claimable tasks (Open / Pending fix) whose needs
-    /// all hold; empty when nothing is claimable right now.
-    pub ready_line: String,
+    /// One line per live root with its needs as indented leaves (cargo-tree
+    /// connectors), plus a cycle `warning:` line when the tails loop.
+    pub tree_lines: Vec<String>,
+    /// Comma-joined ids of claimable tasks (Open / Pending fix whose needs
+    /// all hold). Empty when nothing is claimable or no live task carries a
+    /// tail - then the row would only restate the Open roots.
+    pub claimable_line: String,
 }
 
-/// Build the dependency view for one session's board. `boundary_status`
-/// resolves a cross-session ref against the target session's own board
-/// (`None` = session or task not found, shown as `(unknown)`). Returns `None`
-/// when no live entry carries a `needs:` tail - dependency-free sessions keep
-/// the bare card. Read-only over the board: nothing here writes back.
+/// cargo-tree connectors. Roots hang off the `tasks` label row; children of
+/// the last root lose the rail. Exactly these four pieces, so the forest
+/// cannot drift into a second shape.
+const BRANCH: &str = "├── ";
+const LAST_BRANCH: &str = "└── ";
+const RAIL: &str = "│   ";
+const NO_RAIL: &str = "    ";
+
+fn branch(last: bool) -> &'static str {
+    if last {
+        LAST_BRANCH
+    } else {
+        BRANCH
+    }
+}
+
+/// A dimmed connector: the structure recedes, the task nodes carry the eye.
+fn dim_branch(last: bool) -> String {
+    ui::paint(ui::DIM, branch(last))
+}
+
+/// Status glyph + color for one task node. Shape carries the status without
+/// color; color reinforces it (cyan open, yellow review, magenta fix, green
+/// done).
+fn status_mark(s: Status) -> String {
+    let (g, style) = match s {
+        Status::Open => (ui::T_OPEN, ui::CYAN),
+        Status::PendingReview => (ui::T_REVIEW, ui::YELLOW),
+        Status::PendingFix => (ui::T_FIX, ui::MAGENTA),
+        Status::Done => (ui::T_DONE, ui::GREEN),
+    };
+    ui::paint(style, g)
+}
+
+/// Where a `needs:` ref points, resolved against this board or the boundary.
+enum RefTarget {
+    /// The consumer names itself.
+    Itself,
+    /// A task on this board (index into `entries`).
+    Local(usize),
+    /// A local id no board entry carries.
+    Missing,
+    /// A cross-session ref, with the target's status when the boundary
+    /// resolves it (`None` = session or task not found).
+    Foreign {
+        name: String,
+        status: Option<Status>,
+    },
+}
+
+/// One rendered forest leaf, with whether the ref counts as met.
+struct LeafView {
+    line: String,
+    satisfied: bool,
+}
+
+/// Render one ref as a leaf: a status-marked task when it resolves, `?`
+/// when the boards cannot resolve it, `!` when the relation itself is
+/// broken. The condition rides on every leaf, resolved or not. A ref is met
+/// only when it resolves to a Done task and carries no condition - a
+/// condition is never assumed verified.
+fn leaf_view(
+    r: &NeedRef,
+    consumer: usize,
+    session: &str,
+    entries: &[Entry],
+    by_id: &HashMap<&str, usize>,
+    boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
+) -> LeafView {
+    // A `session/task` ref naming this session itself is local.
+    let local = r.session.as_deref().is_none_or(|s| s == session);
+    let target = if local && r.task == entries[consumer].id {
+        RefTarget::Itself
+    } else if local {
+        match by_id.get(r.task.as_str()) {
+            Some(&i) => RefTarget::Local(i),
+            None => RefTarget::Missing,
+        }
+    } else {
+        let s = r.session.as_deref().unwrap();
+        RefTarget::Foreign {
+            name: format!("{s}/{}", r.task),
+            status: boundary_status(s, &r.task),
+        }
+    };
+    let cond = match &r.condition {
+        Some(c) => format!(" [{c}]"),
+        None => String::new(),
+    };
+    match target {
+        RefTarget::Itself => LeafView {
+            line: format!("{} itself", ui::paint(ui::YELLOW, ui::T_ALERT)),
+            satisfied: false,
+        },
+        RefTarget::Local(i) => {
+            let e = &entries[i];
+            // A Done ref with a condition looks satisfied but never is -
+            // say so at the leaf.
+            let unverified = if e.status == Status::Done && r.condition.is_some() {
+                " (unverified)"
+            } else {
+                ""
+            };
+            LeafView {
+                line: format!("{} {}{cond}{unverified}", status_mark(e.status), e.label),
+                satisfied: e.status == Status::Done && r.condition.is_none(),
+            }
+        }
+        RefTarget::Missing => LeafView {
+            line: format!(
+                "{} {}{cond} (missing)",
+                ui::paint(ui::DIM, ui::T_UNKNOWN),
+                r.task
+            ),
+            satisfied: false,
+        },
+        RefTarget::Foreign { name, status } => match status {
+            Some(s) => {
+                let unverified = if s == Status::Done && r.condition.is_some() {
+                    " (unverified)"
+                } else {
+                    ""
+                };
+                LeafView {
+                    line: format!("{} {name}{cond}{unverified}", status_mark(s)),
+                    satisfied: s == Status::Done && r.condition.is_none(),
+                }
+            }
+            None => LeafView {
+                line: format!(
+                    "{} {name}{cond} (unknown)",
+                    ui::paint(ui::DIM, ui::T_UNKNOWN)
+                ),
+                satisfied: false,
+            },
+        },
+    }
+}
+
+/// Build the forest view for one session's board. `boundary_status` resolves
+/// a cross-session ref against the target session's own board (`None` =
+/// session or task not found, shown as `(unknown)`). Returns `None` when no
+/// task is live - a fully-done (or empty) board keeps the bare card (summary
+/// + done line only). Read-only over the board: nothing here writes back.
 pub fn build_view(
     board: &TasksBoard,
     session: &str,
@@ -193,59 +335,62 @@ pub fn build_view(
         .enumerate()
         .map(|(i, e)| (e.id.as_str(), i))
         .collect();
-    let has_live_needs = entries.iter().any(|e| {
-        e.status.is_unfinished() && (!e.needs.refs.is_empty() || e.needs.unparseable.is_some())
-    });
-    if !has_live_needs {
+    // Roots: every live task, in board order (collect_entries already walks
+    // Open, then Pending review, then Pending fix).
+    let live: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.status.is_unfinished())
+        .map(|(i, _)| i)
+        .collect();
+    if live.is_empty() {
         return None;
     }
+    // The claimable row earns its place only when a tail exists to gate
+    // anything; without tails it would restate the Open roots.
+    let has_live_tail = live.iter().any(|&i| {
+        let n = &entries[i].needs;
+        !n.refs.is_empty() || n.unparseable.is_some()
+    });
 
-    // One pass: each live task with refs yields its needs line and its
-    // readiness; the line is the wait reason, so nothing is rendered twice.
-    let mut needs_lines = Vec::new();
-    let mut ready: Vec<&str> = Vec::new();
-    for e in &entries {
-        if !e.status.is_unfinished() {
-            continue;
-        }
-        let claimable = matches!(e.status, Status::Open | Status::PendingFix);
-        if let Some(raw) = &e.needs.unparseable {
-            needs_lines.push(format!(
-                "{} ({}) needs check: unparseable tail ({})",
-                e.label,
-                e.status.label(),
-                raw
-            ));
-            continue;
-        }
-        if e.needs.refs.is_empty() {
-            if claimable {
-                ready.push(&e.id);
-            }
-            continue;
-        }
-        let mut parts: Vec<String> = Vec::new();
-        let mut all_met = true;
-        for r in &e.needs.refs {
-            let rv = ref_view(r, e, session, &entries, &by_id, boundary_status);
-            all_met &= rv.satisfied;
-            parts.push(rv.display);
-        }
-        if claimable && all_met {
-            ready.push(&e.id);
-        }
-        // Leave the full relation intact; the terminal can wrap long lines.
-        needs_lines.push(format!(
-            "{} ({}) needs {}",
-            e.label,
-            e.status.label(),
-            parts.join(", ")
+    let mut tree_lines = Vec::new();
+    let mut claimable: Vec<&str> = Vec::new();
+    for (pos, &i) in live.iter().enumerate() {
+        let e = &entries[i];
+        let last_root = pos + 1 == live.len();
+        tree_lines.push(format!(
+            "{}{} {}",
+            dim_branch(last_root),
+            status_mark(e.status),
+            e.label
         ));
+        // Children of the last root drop the rail (cargo tree).
+        let rail = ui::paint(ui::DIM, if last_root { NO_RAIL } else { RAIL });
+        let mut all_met = true;
+        if let Some(raw) = &e.needs.unparseable {
+            tree_lines.push(format!(
+                "{rail}{}{} unparseable tail ({raw})",
+                dim_branch(true),
+                ui::paint(ui::YELLOW, ui::T_ALERT)
+            ));
+            all_met = false;
+        } else {
+            for (j, r) in e.needs.refs.iter().enumerate() {
+                let lv = leaf_view(r, i, session, &entries, &by_id, boundary_status);
+                all_met &= lv.satisfied;
+                let leaf_last = j + 1 == e.needs.refs.len();
+                tree_lines.push(format!("{rail}{}{}", dim_branch(leaf_last), lv.line));
+            }
+        }
+        let claimable_status = matches!(e.status, Status::Open | Status::PendingFix);
+        if claimable_status && all_met {
+            claimable.push(e.id.as_str());
+        }
     }
 
     if let Some(cycle) = find_cycle(&live_adjacency(&entries, &by_id, session)) {
         let names: Vec<&str> = cycle.iter().map(|&i| entries[i].label.as_str()).collect();
-        needs_lines.push(format!(
+        tree_lines.push(format!(
             "{} cycle in needs: {}",
             ui::paint(ui::YELLOW, "warning:"),
             names.join(" -> ")
@@ -253,73 +398,17 @@ pub fn build_view(
     }
 
     Some(DepView {
-        needs_lines,
-        ready_line: ready.join(", "),
+        tree_lines,
+        claimable_line: if has_live_tail {
+            claimable.join(", ")
+        } else {
+            String::new()
+        },
     })
 }
 
-/// One ref rendered for a needs line, with whether it counts as met.
-struct RefView {
-    display: String,
-    satisfied: bool,
-}
-
-/// Render one ref as `name (status)` with its `[condition]` when unmet. A ref
-/// is met only when it resolves on its target board, is Done there, and
-/// carries no condition - a condition is never assumed verified. Anomalies
-/// are named inline: `itself`, `(missing)`, `(unknown)`.
-fn ref_view(
-    r: &NeedRef,
-    consumer: &Entry,
-    session: &str,
-    entries: &[Entry],
-    by_id: &HashMap<&str, usize>,
-    boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
-) -> RefView {
-    // A `session/task` ref naming this session itself is local.
-    let local = r.session.as_deref().is_none_or(|s| s == session);
-    if local && r.task == consumer.id {
-        return RefView {
-            display: "itself".to_string(),
-            satisfied: false,
-        };
-    }
-    let cond = match &r.condition {
-        Some(c) => format!(" [{c}]"),
-        None => String::new(),
-    };
-    let (name, status, absent) = if local {
-        match by_id.get(r.task.as_str()) {
-            Some(&i) => (entries[i].label.clone(), Some(entries[i].status), None),
-            None => (r.task.clone(), None, Some("missing")),
-        }
-    } else {
-        let s = r.session.as_deref().unwrap();
-        (
-            format!("{s}/{}", r.task),
-            boundary_status(s, &r.task),
-            Some("unknown"),
-        )
-    };
-    let display = match status {
-        Some(Status::Done) if r.condition.is_none() => {
-            return RefView {
-                display: format!("{name} (Done)"),
-                satisfied: true,
-            };
-        }
-        Some(Status::Done) => format!("{name} (Done){cond} (unverified)"),
-        Some(s) => format!("{name} ({}){cond}", s.label()),
-        None => format!("{name} ({}){cond}", absent.unwrap()),
-    };
-    RefView {
-        display,
-        satisfied: false,
-    }
-}
-
 /// Local edges among live entries, for cycle detection. Self-loops are
-/// excluded (the line already says `needs itself`); missing refs have no
+/// excluded (the leaf already says `! itself`); missing refs have no
 /// target. Done entries take no part: their tails are history, and a loop
 /// through a Done task blocks nothing.
 fn live_adjacency(
@@ -477,57 +566,67 @@ mod tests {
         }
     }
 
-    // --- the needs list ---
+    // --- the forest ---
 
     #[test]
-    fn diamond_lists_every_edge_and_the_ready_set() {
+    fn diamond_renders_each_edge_and_the_claimable_set() {
         let v = view(DIAMOND);
         // The fork (001 needed by both) and the join (004 needs both) are
-        // spelled out - no multi-prerequisite relation is dropped.
+        // spelled out; a live task is a single leaf under another root (002
+        // under 004), expanded only at its own root - no subtree repeats.
         assert_eq!(
-            v.needs_lines,
+            v.tree_lines,
             vec![
-                "002 api (Open) needs 001 contract (Done)",
-                "003 frontend (Open) needs 001 contract (Done)",
-                "004 e2e (Open) needs 002 api (Open), 003 frontend (Open)",
+                "├── ○ 002 api",
+                "│   └── ✓ 001 contract",
+                "├── ○ 003 frontend",
+                "│   └── ✓ 001 contract",
+                "└── ○ 004 e2e",
+                "    ├── ○ 002 api",
+                "    └── ○ 003 frontend",
             ]
         );
-        assert_eq!(v.ready_line, "002, 003");
+        assert_eq!(v.claimable_line, "002, 003");
     }
 
     #[test]
-    fn chain_carries_each_status_and_pending_review_is_not_ready() {
+    fn chain_marks_each_status_and_pending_review_is_not_claimable() {
         let md = "# b\n\n## Open\n- 004 e2e - x needs: 002\n\n\
                   ## Pending review\n- 002 api - x needs: 001\n\n\
                   ## Pending fix\n- 003 fix - x needs: 001\n\n\
                   ## Done\n- 001 contract - x\n";
         let v = view(md);
+        // Roots in board order: Open, then Pending review (◐), then Pending
+        // fix (◑); the last root's children drop the rail.
         assert_eq!(
-            v.needs_lines,
+            v.tree_lines,
             vec![
-                "004 e2e (Open) needs 002 api (Pending review)",
-                "002 api (Pending review) needs 001 contract (Done)",
-                "003 fix (Pending fix) needs 001 contract (Done)",
+                "├── ○ 004 e2e",
+                "│   └── ◐ 002 api",
+                "├── ◐ 002 api",
+                "│   └── ✓ 001 contract",
+                "└── ◑ 003 fix",
+                "    └── ✓ 001 contract",
             ]
         );
         // 002 awaits the coordinator, so it is not claimable; 003 is.
-        assert_eq!(v.ready_line, "003");
+        assert_eq!(v.claimable_line, "003");
     }
 
     #[test]
     fn gistless_entry_label_drops_the_tail() {
         let v = view("# b\n\n## Open\n- 002 api check needs: 001\n\n## Done\n- 001 contract\n");
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api check (Open) needs 001 contract (Done)"]
+            v.tree_lines,
+            vec!["└── ○ 002 api check", "    └── ✓ 001 contract",]
         );
-        assert_eq!(v.ready_line, "002");
+        assert_eq!(v.claimable_line, "002");
     }
 
     #[test]
     fn cjk_labels_render_inline() {
         let v = view("# b\n\n## Open\n- 002 前端 - x needs: 001\n\n## Done\n- 001 契约 - x\n");
-        assert_eq!(v.needs_lines, vec!["002 前端 (Open) needs 001 契约 (Done)"]);
+        assert_eq!(v.tree_lines, vec!["└── ○ 002 前端", "    └── ✓ 001 契约"]);
     }
 
     #[test]
@@ -539,22 +638,29 @@ mod tests {
             "contract".repeat(20)
         );
         let v = view(&md);
-        assert!(v.needs_lines[0].contains(&format!("001 {} (Done)", "contract".repeat(20))));
-        assert!(v.needs_lines[0].ends_with("002 blocker (Open) [interface PR merged]"));
-        assert_eq!(v.ready_line, "002");
+        assert!(v.tree_lines[1].contains(&format!("✓ 001 {}", "contract".repeat(20))));
+        assert_eq!(
+            v.tree_lines[2],
+            "│   └── ○ 002 blocker [interface PR merged]"
+        );
+        assert_eq!(v.claimable_line, "002");
     }
 
-    // --- ready ---
+    // --- claimable ---
 
     #[test]
     fn conditioned_ref_is_never_satisfied() {
         let md = "# b\n\n## Open\n- 002 api - x needs: 001 [interface PR merged]\n\n\
                   ## Done\n- 001 contract - x\n";
         let v = view(md);
-        assert!(v.ready_line.is_empty());
+        assert_eq!(v.claimable_line, "");
+        // The leaf looks Done but says so itself: the condition is unverified.
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api (Open) needs 001 contract (Done) [interface PR merged] (unverified)"]
+            v.tree_lines,
+            vec![
+                "└── ○ 002 api",
+                "    └── ✓ 001 contract [interface PR merged] (unverified)",
+            ]
         );
     }
 
@@ -564,10 +670,10 @@ mod tests {
         let mut boundary =
             |s: &str, t: &str| (s == "api-contract" && t == "012").then_some(Status::Done);
         let v = build_view(&board, "csm", &mut boundary).unwrap();
-        assert_eq!(v.ready_line, "002");
+        assert_eq!(v.claimable_line, "002");
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api (Open) needs api-contract/012 (Done)"]
+            v.tree_lines,
+            vec!["└── ○ 002 api", "    └── ✓ api-contract/012"]
         );
     }
 
@@ -579,10 +685,13 @@ mod tests {
             let mut boundary =
                 |s: &str, t: &str| (s == session && t == "001").then_some(Status::Done);
             let v = build_view(&board, "csm", &mut boundary).unwrap();
-            assert_eq!(v.ready_line, "002");
+            assert_eq!(v.claimable_line, "002");
             assert_eq!(
-                v.needs_lines,
-                vec![format!("002 api (Open) needs {session}/001 (Done)")]
+                v.tree_lines,
+                vec![
+                    "└── ○ 002 api".to_string(),
+                    format!("    └── ✓ {session}/001")
+                ]
             );
         }
     }
@@ -591,30 +700,52 @@ mod tests {
     fn own_session_prefix_resolves_locally() {
         let md = "# b\n\n## Open\n- 002 api - x needs: csm/001\n\n## Done\n- 001 contract - x\n";
         let v = view(md);
-        assert_eq!(v.ready_line, "002");
+        assert_eq!(v.claimable_line, "002");
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api (Open) needs 001 contract (Done)"]
+            v.tree_lines,
+            vec!["└── ○ 002 api", "    └── ✓ 001 contract"]
         );
     }
 
-    // --- anomalies: marked inline, never satisfied ---
+    // --- anomalies: marked at the leaf, never satisfied ---
 
     #[test]
     fn unknown_boundary_is_flagged_not_satisfied() {
         let v = view("# b\n\n## Open\n- 002 api - x needs: api-contract/012\n");
-        assert!(v.ready_line.is_empty());
+        assert_eq!(v.claimable_line, "");
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api (Open) needs api-contract/012 (unknown)"]
+            v.tree_lines,
+            vec!["└── ○ 002 api", "    └── ? api-contract/012 (unknown)"]
         );
     }
 
     #[test]
     fn missing_local_ref_is_flagged_inline() {
         let v = view("# b\n\n## Open\n- 002 api - x needs: 099\n");
-        assert!(v.ready_line.is_empty());
-        assert_eq!(v.needs_lines, vec!["002 api (Open) needs 099 (missing)"]);
+        assert_eq!(v.claimable_line, "");
+        assert_eq!(
+            v.tree_lines,
+            vec!["└── ○ 002 api", "    └── ? 099 (missing)"]
+        );
+    }
+
+    #[test]
+    fn unresolved_leaves_keep_their_condition() {
+        // The condition matters most exactly where the ref cannot resolve -
+        // it is what must be verified once the target appears.
+        let v = view(
+            "# b\n\n## Open\n- 002 api - x needs: 099 [interface PR merged], \
+             api-contract/012 [deployed]\n",
+        );
+        assert_eq!(
+            v.tree_lines,
+            vec![
+                "└── ○ 002 api",
+                "    ├── ? 099 [interface PR merged] (missing)",
+                "    └── ? api-contract/012 [deployed] (unknown)",
+            ]
+        );
+        assert_eq!(v.claimable_line, "");
     }
 
     #[test]
@@ -622,50 +753,62 @@ mod tests {
         let md = "# b\n\n## Open\n- 003 solo - x needs: 001, 099\n\n## Done\n- 001 contract - x\n";
         let v = view(md);
         assert_eq!(
-            v.needs_lines,
-            vec!["003 solo (Open) needs 001 contract (Done), 099 (missing)"]
+            v.tree_lines,
+            vec![
+                "└── ○ 003 solo",
+                "    ├── ✓ 001 contract",
+                "    └── ? 099 (missing)",
+            ]
         );
-        assert!(v.ready_line.is_empty());
+        assert_eq!(v.claimable_line, "");
     }
 
     #[test]
     fn self_need_is_named_itself_and_never_satisfied() {
         let v = view("# b\n\n## Open\n- 002 api - x needs: 002\n");
-        assert_eq!(v.needs_lines, vec!["002 api (Open) needs itself"]);
-        assert!(v.ready_line.is_empty());
-        // A self-loop is already named by the line; no cycle warning on top.
-        assert!(!v.needs_lines.iter().any(|l| l.contains("cycle")));
+        assert_eq!(v.tree_lines, vec!["└── ○ 002 api", "    └── ! itself"]);
+        assert_eq!(v.claimable_line, "");
+        // A self-loop is already named by the leaf; no cycle warning on top.
+        assert!(!v.tree_lines.iter().any(|l| l.contains("cycle")));
     }
 
     #[test]
     fn cycle_keeps_every_edge_and_names_the_loop_once() {
         let v = view("# b\n\n## Open\n- 002 api - x needs: 003\n- 003 frontend - x needs: 002\n");
+        // Expand-once: each side is a single leaf under the other, so the
+        // loop renders without recursing; the warning names it once.
         assert_eq!(
-            v.needs_lines,
+            v.tree_lines,
             vec![
-                "002 api (Open) needs 003 frontend (Open)",
-                "003 frontend (Open) needs 002 api (Open)",
+                "├── ○ 002 api",
+                "│   └── ○ 003 frontend",
+                "└── ○ 003 frontend",
+                "    └── ○ 002 api",
                 "warning: cycle in needs: 002 api -> 003 frontend -> 002 api",
             ]
         );
-        assert!(v.ready_line.is_empty());
+        assert_eq!(v.claimable_line, "");
     }
 
     #[test]
     fn unparseable_tail_is_surfaced_inline() {
         let v = view("# b\n\n## Open\n- 002 api - x needs: ???\n");
         assert_eq!(
-            v.needs_lines,
-            vec!["002 api (Open) needs check: unparseable tail (needs: ???)"]
+            v.tree_lines,
+            vec!["└── ○ 002 api", "    └── ! unparseable tail (needs: ???)"]
         );
-        assert!(v.ready_line.is_empty());
+        assert_eq!(v.claimable_line, "");
     }
 
-    // --- dependency-free sessions keep the bare card ---
+    // --- boards without live tails ---
 
     #[test]
-    fn dependency_free_board_has_no_view() {
-        assert!(view_or_none("# b\n\n## Open\n- 001 a - x\n- 002 b - x\n").is_none());
+    fn dependency_free_board_renders_roots_without_claimable() {
+        // No tails to gate anything: the forest is the plain root list, and
+        // a claimable row would only restate it.
+        let v = view("# b\n\n## Open\n- 001 a - x\n- 002 b - x\n");
+        assert_eq!(v.tree_lines, vec!["├── ○ 001 a", "└── ○ 002 b"]);
+        assert_eq!(v.claimable_line, "");
     }
 
     #[test]
