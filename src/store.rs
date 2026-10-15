@@ -1,15 +1,19 @@
 //! csm home layout, the kv index, and session metadata.
 //!
-//! Layout:
+//! Layout (`workspace::SCAFFOLD` is what the per-session part is created
+//! from, and is authoritative - this is a reading map, not a second list):
 //!   ~/.csm/
 //!     index.json          - kv: { sessions: { <name>: { origin_pwd, created_at, last_access, pinned } } }
 //!     sessions/<name>/
 //!       state.md
-//!       progress.md
 //!       scripts/INDEX.md
 //!       scripts/...
 //!       notes/INDEX.md
 //!       notes/...
+//!       views/INDEX.md
+//!       views/...
+//!       tasks/INDEX.md
+//!       tasks/...
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};

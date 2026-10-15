@@ -16,7 +16,7 @@
 
 use crate::ui;
 use crate::workspace::{entry_head, entry_id, Status, TasksBoard};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // --- needs-tail parsing (the board's dependency mapping) ---------------------
 
@@ -149,9 +149,12 @@ struct Entry {
     label: String,
     status: Status,
     needs: TaskNeeds,
+    /// Whether a view binds to this task. Stamped once here, so the binding is
+    /// task data rather than something each render site re-derives.
+    has_view: bool,
 }
 
-fn collect_entries(board: &TasksBoard) -> Vec<Entry> {
+fn collect_entries(board: &TasksBoard, view_ids: &HashSet<String>) -> Vec<Entry> {
     let mut out = Vec::new();
     for (raws, status) in board.sections() {
         for raw in raws {
@@ -163,6 +166,7 @@ fn collect_entries(board: &TasksBoard) -> Vec<Entry> {
                 label: entry_head(raw).to_string(),
                 status,
                 needs: parse_needs_tail(raw),
+                has_view: view_ids.contains(id),
             });
         }
     }
@@ -199,6 +203,18 @@ fn branch(last: bool) -> &'static str {
 /// A dimmed connector: the structure recedes, the task nodes carry the eye.
 fn dim_branch(last: bool) -> String {
     ui::paint(ui::DIM, branch(last))
+}
+
+/// A task's view marker: the painted glyph when the task has a view, nothing
+/// otherwise. Presence only - absence needs no glyph, so the forest stays a
+/// picture of the plan. The single emitter for the marker, so every place a
+/// task's label renders separates it from the label the same way.
+pub fn view_mark(has_view: bool) -> String {
+    if has_view {
+        format!(" {}", ui::paint(ui::CYAN_BOLD, ui::T_VIEW))
+    } else {
+        String::new()
+    }
 }
 
 /// Status glyph + color for one task node. Shape carries the status without
@@ -284,7 +300,12 @@ fn leaf_view(
                 ""
             };
             LeafView {
-                line: format!("{} {}{cond}{unverified}", status_mark(e.status), e.label),
+                line: format!(
+                    "{} {}{cond}{unverified}{}",
+                    status_mark(e.status),
+                    e.label,
+                    view_mark(e.has_view)
+                ),
                 satisfied: e.status == Status::Done && r.condition.is_none(),
             }
         }
@@ -321,15 +342,18 @@ fn leaf_view(
 
 /// Build the forest view for one session's board. `boundary_status` resolves
 /// a cross-session ref against the target session's own board (`None` =
-/// session or task not found, shown as `(unknown)`). Returns `None` when no
-/// task is live - a fully-done (or empty) board keeps the bare card (summary
-/// + done line only). Read-only over the board: nothing here writes back.
+/// session or task not found, shown as `(unknown)`). `view_ids` are the task
+/// ids that have a view, marked on their task's label wherever it renders.
+/// Returns `None` when no task is live - a fully-done (or empty) board keeps
+/// the bare card (summary + done line only). Read-only over the board:
+/// nothing here writes back.
 pub fn build_view(
     board: &TasksBoard,
     session: &str,
     boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
+    view_ids: &HashSet<String>,
 ) -> Option<DepView> {
-    let entries = collect_entries(board);
+    let entries = collect_entries(board, view_ids);
     let by_id: HashMap<&str, usize> = entries
         .iter()
         .enumerate()
@@ -359,10 +383,11 @@ pub fn build_view(
         let e = &entries[i];
         let last_root = pos + 1 == live.len();
         tree_lines.push(format!(
-            "{}{} {}",
+            "{}{} {}{}",
             dim_branch(last_root),
             status_mark(e.status),
-            e.label
+            e.label,
+            view_mark(e.has_view)
         ));
         // Children of the last root drop the rail (cargo tree).
         let rail = ui::paint(ui::DIM, if last_root { NO_RAIL } else { RAIL });
@@ -496,13 +521,54 @@ mod tests {
         None
     }
 
+    /// A view-id set from literals: the shape the marker tests assert.
+    fn view_ids(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
     fn view_or_none(md: &str) -> Option<DepView> {
         let board = parse_tasks_board(md);
-        build_view(&board, "csm", &mut no_boundary)
+        build_view(&board, "csm", &mut no_boundary, &HashSet::new())
     }
 
     fn view(md: &str) -> DepView {
         view_or_none(md).expect("board has a live needs tail")
+    }
+
+    fn view_with(md: &str, ids: &[&str]) -> DepView {
+        let board = parse_tasks_board(md);
+        build_view(&board, "csm", &mut no_boundary, &view_ids(ids))
+            .expect("board has a live needs tail")
+    }
+
+    /// A view marker follows the task it belongs to, everywhere that task's
+    /// name renders: its own line, and the `needs:` leaf that references it.
+    /// A task with no file carries nothing.
+    #[test]
+    fn view_marker_follows_the_task_through_the_forest() {
+        let md = "## Open\n- 001 a - x\n- 002 b - x needs: 001\n";
+        assert_eq!(
+            view_with(md, &["001"]).tree_lines,
+            vec!["├── ○ 001 a ▤", "└── ○ 002 b", "    └── ○ 001 a ▤"]
+        );
+        assert_eq!(
+            view_with(md, &["002"]).tree_lines,
+            vec!["├── ○ 001 a", "└── ○ 002 b ▤", "    └── ○ 001 a"]
+        );
+    }
+
+    /// The marker on a leaf follows the ref's own annotations, so the
+    /// condition and `(unverified)` stay attached to the label.
+    #[test]
+    fn view_marker_follows_leaf_annotations() {
+        let md = "## Open\n- 002 api - x needs: 001 [pr merged]\n\n## Done\n- 001 contract - x\n";
+        assert_eq!(
+            view_with(md, &["001"]).tree_lines,
+            vec![
+                "└── ○ 002 api",
+                "    └── ✓ 001 contract [pr merged] (unverified) ▤",
+            ]
+        );
     }
 
     /// Fork/join: 001 -> 002, 003 -> 004.
@@ -669,7 +735,7 @@ mod tests {
         let board = parse_tasks_board("# b\n\n## Open\n- 002 api - x needs: api-contract/012\n");
         let mut boundary =
             |s: &str, t: &str| (s == "api-contract" && t == "012").then_some(Status::Done);
-        let v = build_view(&board, "csm", &mut boundary).unwrap();
+        let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
         assert_eq!(v.claimable_line, "002");
         assert_eq!(
             v.tree_lines,
@@ -684,7 +750,7 @@ mod tests {
                 parse_tasks_board(&format!("## Open\n- 002 api - x needs: {session}/001\n"));
             let mut boundary =
                 |s: &str, t: &str| (s == session && t == "001").then_some(Status::Done);
-            let v = build_view(&board, "csm", &mut boundary).unwrap();
+            let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
             assert_eq!(v.claimable_line, "002");
             assert_eq!(
                 v.tree_lines,
