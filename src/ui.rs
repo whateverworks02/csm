@@ -58,6 +58,9 @@ pub const T_DONE: &str = "✓";
 pub const T_UNKNOWN: &str = "?";
 /// A broken relation: self-need or an unparseable tail.
 pub const T_ALERT: &str = "!";
+/// A task that has a view: the human-facing page at `views/<id>-<slug>.html`.
+/// Painted by `needs::view_mark`, which owns where it rides.
+pub const T_VIEW: &str = "▤";
 
 // --- Color gate (per stream) ------------------------------------------------
 

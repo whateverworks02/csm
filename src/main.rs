@@ -21,7 +21,7 @@ use csm::{agent, doctor, gc, hook, inject, markdown, needs, store, ui, workspace
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 #[derive(Parser)]
@@ -565,6 +565,10 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     // foreign board, read at most once per session regardless of how many
     // refs point into it.
     let board = workspace::read_tasks_board(&name).unwrap_or_default();
+    // Views ride on the tasks block: a task that has a human-facing page
+    // carries its marker, a task without one carries nothing. The view's
+    // filename names the task, so no task file or registry has to be read.
+    let view_ids = workspace::view_task_ids(&name);
     let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
     let mut lines: Vec<String> = Vec::new();
     let total =
@@ -573,29 +577,28 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         lines.push(tasks_summary_line(&board));
     }
     let mut claimable = String::new();
-    if let Some(view) = needs::build_view(&board, &name, &mut |s, t| {
-        foreign
-            .entry(s.to_string())
-            .or_insert_with(|| workspace::read_tasks_board(s))
-            .as_ref()
-            .and_then(|b| b.status_of(t))
-    }) {
+    if let Some(view) = needs::build_view(
+        &board,
+        &name,
+        &mut |s, t| {
+            foreign
+                .entry(s.to_string())
+                .or_insert_with(|| workspace::read_tasks_board(s))
+                .as_ref()
+                .and_then(|b| b.status_of(t))
+        },
+        &view_ids,
+    ) {
         lines.extend(view.tree_lines);
         claimable = view.claimable_line;
     }
-    if let Some(done) = tasks_done_line(&board) {
+    if let Some(done) = tasks_done_line(&board, &view_ids) {
         lines.push(done);
     }
     card_multiline_row("tasks", &lines);
     if !claimable.is_empty() {
         card_row("claimable", &claimable);
     }
-
-    let scripts = workspace::list_scripts(&name);
-    card_list_row("scripts", &scripts);
-
-    let notes = workspace::list_notes(&name);
-    card_list_row("notes", &notes);
     Ok(())
 }
 
@@ -639,18 +642,26 @@ fn tasks_bar(filled: usize) -> String {
     bar
 }
 
+/// The leading id token of a board head (`entry_head` output) - what a view
+/// binds to, and the token the sort key parses.
+fn head_id(head: &str) -> &str {
+    head.split_whitespace().next().unwrap_or("")
+}
+
 /// Sort key for a board head: its leading id token, numerically when it
 /// parses - ids are not zero-padded, so text order would put `10` before
 /// `9`. Non-numeric ids sort after numeric ones, by text.
 fn head_id_key(head: &str) -> (Option<u64>, &str) {
-    let id = head.split_whitespace().next().unwrap_or("");
+    let id = head_id(head);
     (id.parse().ok(), id)
 }
 
 /// The dim line closing the `tasks` block: `✓ done N · <id slug>, ...` -
 /// every done task (no cap; `csm detail` still shows the raw board), sorted
-/// by id for scanning. `None` when nothing is done yet.
-fn tasks_done_line(board: &workspace::TasksBoard) -> Option<String> {
+/// by id for scanning. `None` when nothing is done yet. The done line is the
+/// only place a done task renders its name, so its view marker rides here or
+/// a finished task's page would be unreachable from the card.
+fn tasks_done_line(board: &workspace::TasksBoard, view_ids: &HashSet<String>) -> Option<String> {
     if board.done.is_empty() {
         return None;
     }
@@ -660,23 +671,26 @@ fn tasks_done_line(board: &workspace::TasksBoard) -> Option<String> {
         .map(|e| workspace::entry_head(e))
         .collect();
     heads.sort_by(|a, b| head_id_key(a).cmp(&head_id_key(b)));
+    // Dim per piece, never over the joined line: each marker carries its own
+    // reset, and a reset inside an enclosing span ends that span - the rest of
+    // the done line would come back at full intensity, which is the one thing
+    // this dim line exists to avoid.
+    let marked: Vec<String> = heads
+        .iter()
+        .map(|h| {
+            format!(
+                "{}{}",
+                ui::paint(ui::DIM, h),
+                needs::view_mark(view_ids.contains(head_id(h)))
+            )
+        })
+        .collect();
     Some(format!(
         "{} {} · {}",
         ui::paint(ui::GREEN, ui::T_DONE),
         ui::paint(ui::DIM, &format!("done {}", board.done.len())),
-        ui::paint(ui::DIM, &heads.join(", ")),
+        marked.join(&ui::paint(ui::DIM, ", ")),
     ))
-}
-
-/// Render a card row for a subdirectory listing: comma-joined names with a
-/// count, or dim "(none)" when empty.
-fn card_list_row(label: &str, items: &[String]) {
-    let val = if items.is_empty() {
-        ui::paint(ui::DIM, "(none)").to_string()
-    } else {
-        format!("{} ({})", items.join(", "), items.len())
-    };
-    card_row(label, &val);
 }
 
 /// `csm detail [name]`: render a session's full `state.md` read-only - the deep
@@ -880,6 +894,16 @@ mod tests {
     }
 
     #[test]
+    fn tasks_done_line_marks_only_tasks_with_a_view() {
+        let b = board("## Done\n- 001 a - gist\n- 002 b - gist\n");
+        let one: HashSet<String> = ["001".to_string()].into_iter().collect();
+        assert_eq!(
+            tasks_done_line(&b, &one).unwrap(),
+            format!("✓ done 2 · 001 a {}, 002 b", ui::T_VIEW),
+        );
+    }
+
+    #[test]
     fn tasks_summary_line_bar_and_counts() {
         let b = board(
             "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
@@ -909,10 +933,10 @@ mod tests {
     fn tasks_done_line_lists_all_sorted_by_id() {
         let b = board("## Done\n- 004 d - gist\n- 001 a - gist\n- 002 b needs: 001\n");
         assert_eq!(
-            tasks_done_line(&b).unwrap(),
+            tasks_done_line(&b, &HashSet::new()).unwrap(),
             "✓ done 3 · 001 a, 002 b, 004 d"
         );
-        assert!(tasks_done_line(&board("## Open\n- 001 a\n")).is_none());
+        assert!(tasks_done_line(&board("## Open\n- 001 a\n"), &HashSet::new()).is_none());
     }
 
     #[test]
@@ -920,7 +944,10 @@ mod tests {
         // Ids are not zero-padded, so text order would put `10` before `9`;
         // id order is numeric.
         let b = board("## Done\n- 10 j - x\n- 9 i - x\n- 002 b - x\n");
-        assert_eq!(tasks_done_line(&b).unwrap(), "✓ done 3 · 002 b, 9 i, 10 j");
+        assert_eq!(
+            tasks_done_line(&b, &HashSet::new()).unwrap(),
+            "✓ done 3 · 002 b, 9 i, 10 j"
+        );
     }
 
     #[test]

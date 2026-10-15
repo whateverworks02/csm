@@ -2,6 +2,7 @@
 
 use crate::store::{session_dir, SessionMeta};
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs;
 
 /// One scaffold artifact: a path relative to the session dir and a function
@@ -27,6 +28,10 @@ const SCAFFOLD: &[Scaffold] = &[
     Scaffold {
         rel: "notes/INDEX.md",
         content: notes_content,
+    },
+    Scaffold {
+        rel: "views/INDEX.md",
+        content: views_content,
     },
     Scaffold {
         rel: "tasks/INDEX.md",
@@ -64,6 +69,15 @@ fn notes_content(name: &str, _origin_pwd: &str) -> String {
 
 fn tasks_content(name: &str, _origin_pwd: &str) -> String {
     tasks_index_template(name)
+}
+
+fn views_content(name: &str, _origin_pwd: &str) -> String {
+    index_template(
+        name,
+        "views",
+        "human-facing HTML task views",
+        "`### <id>-<slug>.html` then a one-line gist",
+    )
 }
 
 /// Ensure the workspace for `name` exists with all scaffolding. Idempotent:
@@ -252,36 +266,51 @@ pub fn read_context_lines(name: &str, max_lines: usize) -> Vec<String> {
         .collect()
 }
 
-/// List filenames under `<session-dir>/<subdir>/` (excluding INDEX.md), sorted.
-fn list_files_in(name: &str, subdir: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let dir = match session_dir(name) {
-        Ok(d) => d.join(subdir),
-        Err(_) => return out,
+/// List view filenames under views/, in task-id order. A view is one
+/// self-contained regular `<id>-<slug>.html` file, and this listing is exactly
+/// that shape: a dot-prefixed name or a directory is not a view (a Finder
+/// `.DS_Store` or a stray `views/assets/` never reaches the card), `INDEX.md`
+/// is not `.html`, and the id sorts numerically because ids are not
+/// zero-padded - byte order would print `10-...` before `9-...` under a board
+/// that reads 9 then 10.
+pub fn list_views(name: &str) -> Vec<String> {
+    let Ok(dir) = session_dir(name) else {
+        return Vec::new();
     };
-    if let Ok(entries) = fs::read_dir(&dir) {
-        for e in entries.flatten() {
-            let fname = e.file_name().to_string_lossy().to_string();
-            if fname == "INDEX.md" {
-                continue;
-            }
-            out.push(fname);
-        }
-    }
-    out.sort();
+    let Ok(entries) = fs::read_dir(dir.join("views")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|fname| !fname.starts_with('.') && fname.ends_with(".html"))
+        .collect();
+    out.sort_by(|a, b| view_id_key(a).cmp(&view_id_key(b)));
     out
 }
 
-/// List script filenames under scripts/ (excluding INDEX.md), sorted.
-pub fn list_scripts(name: &str) -> Vec<String> {
-    list_files_in(name, "scripts")
+/// Sort key for a view filename: its task id, numerically when it parses.
+/// Non-numeric names sort after numeric ones, by filename.
+fn view_id_key(fname: &str) -> (Option<u64>, &str) {
+    (view_task_id(fname).parse().ok(), fname)
 }
 
-/// List note filenames under notes/ (excluding INDEX.md), sorted. Filesystem-
-/// based, so awareness (show card / hook snapshot) does not depend on INDEX.md
-/// being kept current - an unregistered note file is still counted.
-pub fn list_notes(name: &str) -> Vec<String> {
-    list_files_in(name, "notes")
+/// The task id a view file belongs to: the `<id>` of `<id>-<slug>.html`. The
+/// filename carries the binding, so the card can place a view on its task's
+/// line without reading the task file or trusting a registry.
+pub fn view_task_id(fname: &str) -> &str {
+    fname.split_once('-').map_or(fname, |(id, _)| id)
+}
+
+/// The set form of that same binding: every task id that has a view, for the
+/// card's membership test. One derivation of the rule, so a render site reads
+/// the binding instead of re-scanning the filenames.
+pub fn view_task_ids(name: &str) -> HashSet<String> {
+    list_views(name)
+        .iter()
+        .map(|fname| view_task_id(fname).to_string())
+        .collect()
 }
 
 fn state_md_template(name: &str) -> String {
@@ -337,8 +366,8 @@ fn tasks_index_template(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_workspace, expected_files, parse_tasks_board, read_context_lines, read_tasks_board,
-        read_tasks_index_md,
+        ensure_workspace, expected_files, list_views, parse_tasks_board, read_context_lines,
+        read_tasks_board, read_tasks_index_md,
     };
     use crate::store::{session_dir, touch_session};
     use crate::test_support::{with_csm_home, write_board};
@@ -401,6 +430,88 @@ mod tests {
                 "# my custom state\n"
             );
             assert!(session_dir("ws").unwrap().join("tasks/INDEX.md").exists());
+        });
+    }
+
+    /// A view is one self-contained `<id>-<slug>.html` file: the registry is
+    /// scaffolded, and a fresh session has nothing to list.
+    #[test]
+    #[serial]
+    fn views_registry_scaffolded() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            let content =
+                fs::read_to_string(session_dir("ws").unwrap().join("views/INDEX.md")).unwrap();
+            assert!(content.starts_with("# ws - views registry\n"));
+            assert!(content.contains("`### <id>-<slug>.html` then a one-line gist"));
+            assert!(list_views("ws").is_empty());
+        });
+    }
+
+    /// The listing is the enforced view shape, not the raw directory: `views/`
+    /// collects OS and editor droppings the moment a human opens it, and a
+    /// directory named `assets` is not a view. Ids are not zero-padded, so the
+    /// order is numeric - byte order is what would put `10` first.
+    #[test]
+    #[serial]
+    fn list_views_keeps_only_html_files_in_task_id_order() {
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            let dir = session_dir("ws").unwrap().join("views");
+            for f in ["10-ten.html", "9-nine.html", "001-padded.html"] {
+                fs::write(dir.join(f), "<!-- -->").unwrap();
+            }
+            // Not views: a Finder dotfile, a dot-prefixed html file, a
+            // non-html file, and a subdirectory (the `assets/` shape).
+            fs::write(dir.join(".DS_Store"), "").unwrap();
+            fs::write(dir.join(".draft.html"), "").unwrap();
+            fs::write(dir.join("notes.md"), "").unwrap();
+            fs::create_dir(dir.join("assets")).unwrap();
+            assert_eq!(
+                list_views("ws"),
+                vec![
+                    "001-padded.html".to_string(),
+                    "9-nine.html".to_string(),
+                    "10-ten.html".to_string(),
+                ]
+            );
+        });
+    }
+
+    /// The view filename carries the task binding: the id before the first
+    /// dash, which is what the card places the marker by.
+    #[test]
+    fn view_task_id_is_the_leading_id_token() {
+        use super::view_task_id;
+        assert_eq!(view_task_id("001-views.html"), "001");
+        assert_eq!(view_task_id("10-ten-slug.html"), "10");
+        // No dash, no id: the whole name is the token, which matches no task.
+        assert_eq!(view_task_id("draft.html"), "draft.html");
+    }
+
+    /// The binding as a set: the card asks "does this task have a view?" per
+    /// rendered task, so it holds the ids rather than the filenames. A view
+    /// whose name is no task id contributes a token no board entry matches,
+    /// which is how "a view naming no task renders nowhere" falls out.
+    #[test]
+    #[serial]
+    fn view_task_ids_bound_each_view_to_its_task() {
+        use super::view_task_ids;
+        with_csm_home(|_dir| {
+            let meta = touch_session("ws", "/o").unwrap();
+            ensure_workspace("ws", &meta).unwrap();
+            let dir = session_dir("ws").unwrap().join("views");
+            for f in ["001-views.html", "9-nine.html", "draft.html"] {
+                fs::write(dir.join(f), "<!-- -->").unwrap();
+            }
+            assert_eq!(
+                view_task_ids("ws"),
+                ["001".to_string(), "9".to_string(), "draft.html".to_string()]
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>()
+            );
         });
     }
 

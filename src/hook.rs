@@ -52,10 +52,10 @@ fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
 /// (capped) and the `tasks/INDEX.md` board (capped) - the lean orientation
 /// memory. The prompt tells the agent these two files are the orientation
 /// surface and that the `[csm]` block is "only a snapshot of these", so the
-/// snapshot must include both. The agent discovers scripts/notes via the
-/// filesystem (`csm show` lists them; the working-mode prompt points at the
-/// INDEXes), so they aren't injected here. Used by both the SessionStart hook
-/// (`run_hook`) and the pi launch adapter.
+/// snapshot must include both. The agent discovers the `scripts/`, `notes/`
+/// and `views/` corpora through the filesystem and their INDEXes (the
+/// working-mode prompt points at them), so they aren't injected here. Used by
+/// both the SessionStart hook (`run_hook`) and the pi launch adapter.
 pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
