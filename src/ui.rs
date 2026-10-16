@@ -59,11 +59,12 @@ pub const T_UNKNOWN: &str = "?";
 /// A broken relation: self-need or an unparseable tail.
 pub const T_ALERT: &str = "!";
 /// A task that has a view: the human-facing page at `views/<id>-<slug>.html`.
-/// A hollow diamond, in the same thin-outline family as the status glyphs and
-/// distinct from the box-drawing that carries the forest's structure - an
-/// annotation hung off the label, not another piece of the tree. Painted by
-/// `needs::view_mark`, which owns where it rides.
-pub const T_VIEW: &str = "◇";
+/// A solid diamond (U+25C6) - the card's one filled shape. The hollow cut
+/// (`◇`) came first, on the reasoning that a filled shape reads as a piece of
+/// the forest drawn wrong; the session owner overruled it and the hollow
+/// rationale is kept only as superseded. Painted by `needs::view_mark`, which
+/// owns where it rides.
+pub const T_VIEW: &str = "◆";
 
 // --- Color gate (per stream) ------------------------------------------------
 

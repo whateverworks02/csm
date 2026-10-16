@@ -549,11 +549,11 @@ mod tests {
         let md = "## Open\n- 001 a - x\n- 002 b - x needs: 001\n";
         assert_eq!(
             view_with(md, &["001"]).tree_lines,
-            vec!["├── ○ 001 a ◇", "└── ○ 002 b", "    └── ○ 001 a ◇"]
+            vec!["├── ○ 001 a ◆", "└── ○ 002 b", "    └── ○ 001 a ◆"]
         );
         assert_eq!(
             view_with(md, &["002"]).tree_lines,
-            vec!["├── ○ 001 a", "└── ○ 002 b ◇", "    └── ○ 001 a"]
+            vec!["├── ○ 001 a", "└── ○ 002 b ◆", "    └── ○ 001 a"]
         );
     }
 
@@ -566,7 +566,7 @@ mod tests {
             view_with(md, &["001"]).tree_lines,
             vec![
                 "└── ○ 002 api",
-                "    └── ✓ 001 contract [pr merged] (unverified) ◇",
+                "    └── ✓ 001 contract [pr merged] (unverified) ◆",
             ]
         );
     }
