@@ -576,7 +576,7 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 /// the board rendered by its own sections: a summary bar, then every non-empty
 /// section under its label - the live ones as the `needs:` forest (the one
 /// mapping the agents read, so the view cannot drift from the plan), Done as
-/// one id per line. An empty board leaves the block empty, which the caller
+/// one head per line. An empty board leaves the block empty, which the caller
 /// shows as a dim `(none)`. Cross-session refs resolve against each foreign
 /// board, read at most once per session regardless of how many refs point into
 /// it.
@@ -680,18 +680,17 @@ fn head_id_key(head: &str) -> (Option<u64>, &str) {
     (id.parse().ok(), id)
 }
 
-/// How many done ids the card's Done section lists before folding the rest
+/// How many done tasks the card's Done section lists before folding the rest
 /// into a `… +K more` tail. The summary bar already carries the count; the
-/// section is there to find a finished task's id, not to read the archive
+/// section is there to find a finished task, not to read the archive
 /// (`csm detail` renders the raw board).
 const DONE_LINES_MAX: usize = 8;
 
-/// The tasks block's Done section: the section label, then one dim `<id>` line
-/// per done task, in numeric id order, capped at `DONE_LINES_MAX` with a dim
-/// `… +K more` tail. Empty when nothing is done - the block never prints a
-/// label with no line under it. A view marker rides its id's line: the id is
-/// all a done task renders here, so that line is the only place a finished
-/// task's page is reachable from the card.
+/// The tasks block's Done section: the section label, then one dim
+/// `<id> <slug>` line per done task, in numeric id order, capped at
+/// `DONE_LINES_MAX` with a dim `… +K more` tail. Empty when nothing is done -
+/// the block never prints a label with no line under it. A view marker rides
+/// its line.
 fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>) -> Vec<String> {
     if board.done.is_empty() {
         return Vec::new();
@@ -710,7 +709,7 @@ fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>)
     for head in heads.iter().take(DONE_LINES_MAX) {
         lines.push(format!(
             "{}{}",
-            ui::paint(ui::DIM, head_id(head)),
+            ui::paint(ui::DIM, head),
             needs::view_mark(view_ids.contains(head_id(head)))
         ));
     }
@@ -956,15 +955,15 @@ mod tests {
             tasks_done_section(&b, &one),
             vec![
                 "Done".to_string(),
-                format!("001 {}", ui::T_VIEW),
-                "002".to_string()
+                format!("001 a {}", ui::T_VIEW),
+                "002 b".to_string()
             ]
         );
     }
 
     #[test]
-    fn tasks_done_section_lists_one_id_per_line_sorted_by_id() {
-        // A line is the id alone - no gist, no marker unless the task has a
+    fn tasks_done_section_lists_one_head_per_line_sorted_by_id() {
+        // A line is the task's head - no gist, no marker unless the task has a
         // view - and the order is numeric: ids are not zero-padded, so text
         // order would put `10` before `9`.
         let b = board(
@@ -972,7 +971,7 @@ mod tests {
         );
         assert_eq!(
             tasks_done_section(&b, &HashSet::new()),
-            vec!["Done", "001", "002", "004", "9", "10"]
+            vec!["Done", "001 a", "002 b", "004 d", "9 i", "10 j"]
         );
         // Nothing done: no section, so no label without a line under it.
         assert!(tasks_done_section(&board("## Open\n- 001 a\n"), &HashSet::new()).is_empty());
@@ -985,10 +984,10 @@ mod tests {
             md.push_str(&format!("- {i:03} t - x\n"));
         }
         let lines = tasks_done_section(&board(&md), &HashSet::new());
-        // The label, the capped ids, then the tail counting the rest.
+        // The label, the capped heads, then the tail counting the rest.
         assert_eq!(lines.len(), DONE_LINES_MAX + 2);
-        assert_eq!(lines[1], "000");
-        assert_eq!(lines[DONE_LINES_MAX], "007");
+        assert_eq!(lines[1], "000 t");
+        assert_eq!(lines[DONE_LINES_MAX], "007 t");
         assert_eq!(lines.last().unwrap(), "… +3 more");
     }
 
@@ -1010,7 +1009,7 @@ mod tests {
                 "Pending fix".to_string(),
                 "└── ◑ 004 c".to_string(),
                 "Done".to_string(),
-                "001".to_string(),
+                "001 d".to_string(),
             ]
         );
         assert_eq!(claimable, "");
