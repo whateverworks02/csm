@@ -556,30 +556,46 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         .collect();
     card_multiline_row("context", &context_lines);
 
-    // tasks - the board is the operational center, rendered as one block:
-    // a summary bar, the dependency forest (live tasks as roots, their
-    // `needs:` tails as leaves - the one mapping the agents read, so the
-    // view cannot drift from the plan), and the dim done line. `claimable`
-    // turns the forest into a decision: what can be claimed now. An empty
-    // board keeps a dim `(none)`. Cross-session refs resolve against each
-    // foreign board, read at most once per session regardless of how many
-    // refs point into it.
+    // tasks - the board is the operational center, rendered as one block: the
+    // summary bar, then every non-empty section under its own label. `claimable`
+    // turns the live sections into a decision: what can be claimed now.
     let board = workspace::read_tasks_board(&name).unwrap_or_default();
     // Views ride on the tasks block: a task that has a human-facing page
     // carries its marker, a task without one carries nothing. The view's
     // filename names the task, so no task file or registry has to be read.
     let view_ids = workspace::view_task_ids(&name);
-    let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
-    let mut lines: Vec<String> = Vec::new();
+    let (lines, claimable) = tasks_block_lines(&board, &name, &view_ids);
+    card_multiline_row("tasks", &lines);
+    if !claimable.is_empty() {
+        card_row("claimable", &claimable);
+    }
+    Ok(())
+}
+
+/// The `tasks` block's lines, plus the `claimable` row's value. The block is
+/// the board rendered by its own sections: a summary bar, then every non-empty
+/// section under its label - the live ones as the `needs:` forest (the one
+/// mapping the agents read, so the view cannot drift from the plan), Done as
+/// one id per line. An empty board leaves the block empty, which the caller
+/// shows as a dim `(none)`. Cross-session refs resolve against each foreign
+/// board, read at most once per session regardless of how many refs point into
+/// it.
+fn tasks_block_lines(
+    board: &workspace::TasksBoard,
+    name: &str,
+    view_ids: &HashSet<String>,
+) -> (Vec<String>, String) {
     let total =
         board.open.len() + board.pending_review.len() + board.pending_fix.len() + board.done.len();
+    let mut lines: Vec<String> = Vec::new();
     if total > 0 {
-        lines.push(tasks_summary_line(&board));
+        lines.push(tasks_summary_line(board));
     }
+    let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
     let mut claimable = String::new();
     if let Some(view) = needs::build_view(
-        &board,
-        &name,
+        board,
+        name,
         &mut |s, t| {
             foreign
                 .entry(s.to_string())
@@ -587,19 +603,27 @@ fn cmd_show(name: Option<String>) -> Result<()> {
                 .as_ref()
                 .and_then(|b| b.status_of(t))
         },
-        &view_ids,
+        view_ids,
     ) {
-        lines.extend(view.tree_lines);
+        for section in &view.sections {
+            lines.push(section_label(section.status));
+            lines.extend(section.lines.iter().cloned());
+        }
+        // A cycle spans sections, so its warning closes the live part of the
+        // block instead of sitting under one section's label.
+        if let Some(warning) = &view.warning_line {
+            lines.push(warning.clone());
+        }
         claimable = view.claimable_line;
     }
-    if let Some(done) = tasks_done_line(&board, &view_ids) {
-        lines.push(done);
-    }
-    card_multiline_row("tasks", &lines);
-    if !claimable.is_empty() {
-        card_row("claimable", &claimable);
-    }
-    Ok(())
+    lines.extend(tasks_done_section(board, view_ids));
+    (lines, claimable)
+}
+
+/// A section label inside the tasks block: the board's own section name, dim -
+/// the structure recedes, the task nodes carry the eye.
+fn section_label(status: workspace::Status) -> String {
+    ui::paint(ui::DIM, status.label())
 }
 
 /// Width of the progress bar in the `csm show` tasks summary.
@@ -656,14 +680,21 @@ fn head_id_key(head: &str) -> (Option<u64>, &str) {
     (id.parse().ok(), id)
 }
 
-/// The dim line closing the `tasks` block: `✓ done N · <id slug>, ...` -
-/// every done task (no cap; `csm detail` still shows the raw board), sorted
-/// by id for scanning. `None` when nothing is done yet. The done line is the
-/// only place a done task renders its name, so its view marker rides here or
-/// a finished task's page would be unreachable from the card.
-fn tasks_done_line(board: &workspace::TasksBoard, view_ids: &HashSet<String>) -> Option<String> {
+/// How many done ids the card's Done section lists before folding the rest
+/// into a `… +K more` tail. The summary bar already carries the count; the
+/// section is there to find a finished task's id, not to read the archive
+/// (`csm detail` renders the raw board).
+const DONE_LINES_MAX: usize = 8;
+
+/// The tasks block's Done section: the section label, then one dim `<id>` line
+/// per done task, in numeric id order, capped at `DONE_LINES_MAX` with a dim
+/// `… +K more` tail. Empty when nothing is done - the block never prints a
+/// label with no line under it. A view marker rides its id's line: the id is
+/// all a done task renders here, so that line is the only place a finished
+/// task's page is reachable from the card.
+fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>) -> Vec<String> {
     if board.done.is_empty() {
-        return None;
+        return Vec::new();
     }
     let mut heads: Vec<&str> = board
         .done
@@ -671,26 +702,23 @@ fn tasks_done_line(board: &workspace::TasksBoard, view_ids: &HashSet<String>) ->
         .map(|e| workspace::entry_head(e))
         .collect();
     heads.sort_by(|a, b| head_id_key(a).cmp(&head_id_key(b)));
-    // Dim per piece, never over the joined line: each marker carries its own
-    // reset, and a reset inside an enclosing span ends that span - the rest of
-    // the done line would come back at full intensity, which is the one thing
-    // this dim line exists to avoid.
-    let marked: Vec<String> = heads
-        .iter()
-        .map(|h| {
-            format!(
-                "{}{}",
-                ui::paint(ui::DIM, h),
-                needs::view_mark(view_ids.contains(head_id(h)))
-            )
-        })
-        .collect();
-    Some(format!(
-        "{} {} · {}",
-        ui::paint(ui::GREEN, ui::T_DONE),
-        ui::paint(ui::DIM, &format!("done {}", board.done.len())),
-        marked.join(&ui::paint(ui::DIM, ", ")),
-    ))
+    // Dim per piece, never over an enclosing span: each marker carries its own
+    // reset, and a reset inside a span ends that span - the rest of the line
+    // would come back at full intensity, which is the one thing a dim section
+    // exists to avoid.
+    let mut lines = vec![section_label(workspace::Status::Done)];
+    for head in heads.iter().take(DONE_LINES_MAX) {
+        lines.push(format!(
+            "{}{}",
+            ui::paint(ui::DIM, head_id(head)),
+            needs::view_mark(view_ids.contains(head_id(head)))
+        ));
+    }
+    let hidden = heads.len().saturating_sub(DONE_LINES_MAX);
+    if hidden > 0 {
+        lines.push(ui::paint(ui::DIM, &format!("… +{hidden} more")));
+    }
+    lines
 }
 
 /// `csm detail [name]`: render a session's full `state.md` read-only - the deep
@@ -887,20 +915,11 @@ mod tests {
         assert!(err.contains("unknown agent"), "{err}");
     }
 
-    // --- tasks block summary / done line (color is off under test capture) ---
+    // --- tasks block: summary bar, sections, done lines (color is off under
+    // test capture) ---
 
     fn board(md: &str) -> workspace::TasksBoard {
         workspace::parse_tasks_board(md)
-    }
-
-    #[test]
-    fn tasks_done_line_marks_only_tasks_with_a_view() {
-        let b = board("## Done\n- 001 a - gist\n- 002 b - gist\n");
-        let one: HashSet<String> = ["001".to_string()].into_iter().collect();
-        assert_eq!(
-            tasks_done_line(&b, &one).unwrap(),
-            format!("✓ done 2 · 001 a {}, 002 b", ui::T_VIEW),
-        );
     }
 
     #[test]
@@ -930,24 +949,71 @@ mod tests {
     }
 
     #[test]
-    fn tasks_done_line_lists_all_sorted_by_id() {
-        let b = board("## Done\n- 004 d - gist\n- 001 a - gist\n- 002 b needs: 001\n");
+    fn tasks_done_section_marks_only_tasks_with_a_view() {
+        let b = board("## Done\n- 001 a - gist\n- 002 b - gist\n");
+        let one: HashSet<String> = ["001".to_string()].into_iter().collect();
         assert_eq!(
-            tasks_done_line(&b, &HashSet::new()).unwrap(),
-            "✓ done 3 · 001 a, 002 b, 004 d"
+            tasks_done_section(&b, &one),
+            vec![
+                "Done".to_string(),
+                format!("001 {}", ui::T_VIEW),
+                "002".to_string()
+            ]
         );
-        assert!(tasks_done_line(&board("## Open\n- 001 a\n"), &HashSet::new()).is_none());
     }
 
     #[test]
-    fn tasks_done_line_sorts_numerically_by_id() {
-        // Ids are not zero-padded, so text order would put `10` before `9`;
-        // id order is numeric.
-        let b = board("## Done\n- 10 j - x\n- 9 i - x\n- 002 b - x\n");
-        assert_eq!(
-            tasks_done_line(&b, &HashSet::new()).unwrap(),
-            "✓ done 3 · 002 b, 9 i, 10 j"
+    fn tasks_done_section_lists_one_id_per_line_sorted_by_id() {
+        // A line is the id alone - no gist, no marker unless the task has a
+        // view - and the order is numeric: ids are not zero-padded, so text
+        // order would put `10` before `9`.
+        let b = board(
+            "## Done\n- 004 d - gist\n- 10 j - x\n- 9 i - x\n- 002 b needs: 001\n- 001 a - gist\n",
         );
+        assert_eq!(
+            tasks_done_section(&b, &HashSet::new()),
+            vec!["Done", "001", "002", "004", "9", "10"]
+        );
+        // Nothing done: no section, so no label without a line under it.
+        assert!(tasks_done_section(&board("## Open\n- 001 a\n"), &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn tasks_done_section_caps_and_counts_the_rest() {
+        let mut md = String::from("## Done\n");
+        for i in 0..(DONE_LINES_MAX + 3) {
+            md.push_str(&format!("- {i:03} t - x\n"));
+        }
+        let lines = tasks_done_section(&board(&md), &HashSet::new());
+        // The label, the capped ids, then the tail counting the rest.
+        assert_eq!(lines.len(), DONE_LINES_MAX + 2);
+        assert_eq!(lines[1], "000");
+        assert_eq!(lines[DONE_LINES_MAX], "007");
+        assert_eq!(lines.last().unwrap(), "… +3 more");
+    }
+
+    #[test]
+    fn tasks_block_labels_sections_in_board_order() {
+        let b = board(
+            "## Open\n- 002 a - x\n\n## Pending review\n- 003 b - x\n\n\
+             ## Pending fix\n- 004 c - x\n\n## Done\n- 001 d - x\n",
+        );
+        let (lines, claimable) = tasks_block_lines(&b, "ws", &HashSet::new());
+        assert_eq!(
+            lines,
+            vec![
+                tasks_summary_line(&b),
+                "Open".to_string(),
+                "└── ○ 002 a".to_string(),
+                "Pending review".to_string(),
+                "└── ◐ 003 b".to_string(),
+                "Pending fix".to_string(),
+                "└── ◑ 004 c".to_string(),
+                "Done".to_string(),
+                "001".to_string(),
+            ]
+        );
+        assert_eq!(claimable, "");
     }
 
     #[test]
