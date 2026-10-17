@@ -210,7 +210,7 @@ cso() { csm "$@" -a opencode }
 | `csm <name>` | Start or resume a session, launch the agent (default `claude`; `--agent pi`/`codex`/`opencode`, before or after the name) |
 | `csm [-a <agent>]` | Pick a session whose origin is the current directory, launch it with that agent (default `claude`) |
 | `csm list` | List all sessions |
-| `csm show [name]` | Compact card: context, task forest (with a `◆` on each task that has a view), claimable |
+| `csm show [name]` | Compact card: context, the board's sections (task forest, one done id per line; a `◆` marks a task that has a view), claimable |
 | `csm detail [name]` | Full `state.md` + task board render |
 | `csm init` | (Re)install the hook, the prompt, and the csm skills - rerun after upgrading |
 | `csm pin <name>` / `csm unpin` | Protect from / allow garbage collection |
@@ -223,10 +223,11 @@ cso() { csm "$@" -a opencode }
 
 ### Reading the plan in `csm show`
 
-The tasks block reads the board's `needs:` tails directly, so the view is the plan the agents read - there is no second graph file to keep in sync, and a replan shows up on the next `show`. Live tasks (Open, then Pending review, then Pending fix) are the roots of a `cargo tree`-style forest; each task's needs hang below it as leaves, so every wait is visible in place. `claimable` lists what can be claimed now (`Open` and `Pending fix` whose refs all hold):
+The tasks block reads the board's `needs:` tails directly, so the view is the plan the agents read - there is no second graph file to keep in sync, and a replan shows up on the next `show`. The block renders the board by its own sections, in board order: each live section (Open, then Pending review, then Pending fix) carries its label, and the tasks in it are the roots of a `cargo tree`-style forest with their needs hanging below as leaves, so every wait is visible in place. `Done` closes the block with one id per line, and `claimable` lists what can be claimed now (`Open` and `Pending fix` whose refs all hold):
 
 ```text
   tasks       [███████░░░░░░░░░░░░░] 2/6 done
+              Open
               ├── ○ 002 eval-grader
               │   └── ✓ 001 eval-runner
               ├── ○ 003 incident-corpus
@@ -236,11 +237,13 @@ The tasks block reads the board's `needs:` tails directly, so the view is the pl
               └── ○ 005 baseline-and-gate
                   ├── ○ 003 incident-corpus
                   └── ○ 004 judge-layer ◆
-              ✓ done 2 · 001 eval-runner, 006 prompt-surface-patch
+              Done
+              001
+              006
   claimable   002
 ```
 
-Glyphs carry status: `○` open, `◐` pending review, `◑` pending fix, `✓` done. A `◆` after a task's label marks a task that has a view in `views/` - on its forest root, on its leaf under another task, and on the done line - so `004` shows one in both places; a task without a view shows nothing. The card renders no `notes/` or `scripts/` rows: those corpora are read through their `INDEX.md` files, and a note's filename alone says nothing about what it holds. A live task is expanded only at its own root - under another task it is a single leaf (005 waits on 003 and 004, both open; 003 and 004 wait on 002). A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `✓ api-contract/012 [interface PR merged] (unverified)`; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `? ... (missing)` / `? ... (unknown)`; a broken tail or a self-need shows `!`; a dependency cycle is called out with one `warning:` line (the forest itself never recurses). Done tasks close the block as one dim line - the full list, sorted by id. Boards without `needs:` tails render the roots as a plain list.
+Glyphs carry status: `○` open, `◐` pending review, `◑` pending fix, `✓` done. A `◆` after a task's label marks a task that has a view in `views/` - on its forest root, on its leaf under another task, and on its id line under `Done` - so `004` shows one in both places; a task without a view shows nothing. The card renders no `notes/` or `scripts/` rows: those corpora are read through their `INDEX.md` files, and a note's filename alone says nothing about what it holds. A live task is expanded only at its own root - under another task it is a single leaf (005 waits on 003 and 004, both open; 003 and 004 wait on 002). A `[condition]` is never assumed met: `needs: api-contract/012 [interface PR merged]` renders as `✓ api-contract/012 [interface PR merged] (unverified)`; `show` does not read verification evidence from Progress. A ref the board can't resolve shows `? ... (missing)` / `? ... (unknown)`; a broken tail or a self-need shows `!`; a dependency cycle is called out with one `warning:` line (the forest itself never recurses). Done tasks close the block under `Done`, one id per line, sorted by id, capped with a `… +K more` tail counting the rest (`csm detail` still renders the whole board). Boards without `needs:` tails render the roots as a plain list.
 
 ## License
 

@@ -141,6 +141,33 @@ pub enum Status {
 }
 
 impl Status {
+    /// Every status in board order - the one definition of the board's section
+    /// order, which `sections` and both board renderers walk.
+    pub const ALL: [Status; 4] = [
+        Status::Open,
+        Status::PendingReview,
+        Status::PendingFix,
+        Status::Done,
+    ];
+
+    /// The section heading this status renders under. The same four strings
+    /// `tasks/INDEX.md` uses, so the parser and the renderers agree on the
+    /// board's names as well as its order.
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Open => "Open",
+            Status::PendingReview => "Pending review",
+            Status::PendingFix => "Pending fix",
+            Status::Done => "Done",
+        }
+    }
+
+    /// The status a section heading names; `None` for a heading the board
+    /// doesn't know (forward-compatible with renamed statuses).
+    pub fn from_label(title: &str) -> Option<Status> {
+        Status::ALL.into_iter().find(|s| s.label() == title)
+    }
+
     /// The live-work predicate: every status but Done. `needs`' claimable
     /// view and `gc`'s guardrail share it, so "not yet finished" has one home.
     pub fn is_unfinished(self) -> bool {
@@ -149,15 +176,30 @@ impl Status {
 }
 
 impl TasksBoard {
+    /// One section's entries.
+    pub fn section(&self, status: Status) -> &[String] {
+        match status {
+            Status::Open => &self.open,
+            Status::PendingReview => &self.pending_review,
+            Status::PendingFix => &self.pending_fix,
+            Status::Done => &self.done,
+        }
+    }
+
+    /// One section's entries, mutably - the parser's write side.
+    fn section_mut(&mut self, status: Status) -> &mut Vec<String> {
+        match status {
+            Status::Open => &mut self.open,
+            Status::PendingReview => &mut self.pending_review,
+            Status::PendingFix => &mut self.pending_fix,
+            Status::Done => &mut self.done,
+        }
+    }
+
     /// Each section's entries paired with its status, in board order - the one
     /// walk of the four sections, so readers can't drift on order or naming.
     pub fn sections(&self) -> [(&[String], Status); 4] {
-        [
-            (&self.open, Status::Open),
-            (&self.pending_review, Status::PendingReview),
-            (&self.pending_fix, Status::PendingFix),
-            (&self.done, Status::Done),
-        ]
+        Status::ALL.map(|status| (self.section(status), status))
     }
 
     /// Number of entries not yet Done (Open + Pending review + Pending fix).
@@ -182,12 +224,23 @@ impl TasksBoard {
     }
 }
 
+/// A board entry split at its `needs:` tail: the text before the line's last
+/// `needs:` occurrence, and the tail text from that occurrence to the line's
+/// end. `None` when the entry spells no occurrence at all. Per protocol the tail
+/// ends the line, so the last occurrence is the one candidate - and this is the
+/// one place the tail's boundary is decided, for the ref parser, the head, and
+/// the snapshot's rendering alike.
+fn split_needs_tail(entry: &str) -> Option<(&str, &str)> {
+    let at = entry.rfind("needs:")?;
+    Some((&entry[..at], entry[at..].trim()))
+}
+
 /// The `id slug` head of a board entry: the text before the `needs:` tail
 /// (which ends the line per the `needs:` protocol) and before the ` - gist`
-/// separator. Shared by the card rows and the needs view so one format rule
-/// has one home.
+/// separator. Shared by the card rows, the needs view, and the snapshot so one
+/// format rule has one home.
 pub fn entry_head(entry: &str) -> &str {
-    let head = entry.split_once(" needs:").map(|(h, _)| h).unwrap_or(entry);
+    let head = split_needs_tail(entry).map_or(entry, |(head, _)| head);
     head.split_once(" - ")
         .map(|(h, _)| h)
         .unwrap_or(head)
@@ -200,6 +253,189 @@ pub fn entry_id(entry: &str) -> Option<&str> {
     entry_head(entry).split_whitespace().next()
 }
 
+// --- the `needs:` tail (the board's dependency mapping) ----------------------
+
+/// One `needs:` reference: `<task-id>` (same session) or `<session>/<task-id>`
+/// (cross-session boundary). A trailing `[...]` is a delivery condition that
+/// must be verified before the task counts as ready - never assumed met.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeedRef {
+    pub session: Option<String>,
+    pub task: String,
+    pub condition: Option<String>,
+}
+
+/// Parsed `needs:` tail of one board entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskNeeds {
+    pub refs: Vec<NeedRef>,
+    /// The raw tail when it fails the grammar. Surfaced for checking; never
+    /// treated as "no dependencies" (which would mark the task ready).
+    pub unparseable: Option<String>,
+}
+
+/// Parse the `needs:` tail of a board entry. Grammar:
+/// `needs: <ref>[ [condition]][, ...]` - refs comma separated, each carrying
+/// at most one `[condition]`; commas inside a condition do not split. Any
+/// chunk that fails the grammar makes the whole tail unparseable (surfaced,
+/// not silently repaired).
+pub fn parse_needs_tail(entry: &str) -> TaskNeeds {
+    match split_needs_tail(entry) {
+        Some((_, tail)) => parse_tail_text(tail),
+        None => TaskNeeds::default(),
+    }
+}
+
+/// Parse the tail text itself - `needs:` through the end of the line.
+fn parse_tail_text(tail: &str) -> TaskNeeds {
+    let fail = || TaskNeeds {
+        refs: Vec::new(),
+        unparseable: Some(tail.to_string()),
+    };
+    let Some(rest) = tail.strip_prefix("needs:") else {
+        return fail();
+    };
+    let refs_txt = rest.trim();
+    if refs_txt.is_empty() {
+        return fail();
+    }
+    // Split on commas at bracket depth 0 so a condition may contain commas.
+    let mut chunks: Vec<&str> = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, ch) in refs_txt.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                chunks.push(&refs_txt[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    chunks.push(&refs_txt[start..]);
+    let mut refs = Vec::new();
+    for chunk in chunks {
+        match parse_ref(chunk) {
+            Some(r) => refs.push(r),
+            None => return fail(),
+        }
+    }
+    TaskNeeds {
+        refs,
+        unparseable: None,
+    }
+}
+
+/// Parse one comma-separated chunk: `<ref>` or `<ref> [condition]`.
+fn parse_ref(chunk: &str) -> Option<NeedRef> {
+    let chunk = chunk.trim();
+    let (ref_part, condition) = match (chunk.find('['), chunk.rfind(']')) {
+        (None, None) => (chunk, None),
+        // The condition bracket must close the chunk; text after `]` fails.
+        (Some(open), Some(close)) if open < close && close == chunk.len() - 1 => {
+            let cond = chunk[open + 1..close].trim();
+            if cond.is_empty() {
+                return None;
+            }
+            (&chunk[..open], Some(cond.to_string()))
+        }
+        _ => return None,
+    };
+    let ref_part = ref_part.trim();
+    if ref_part.is_empty() || ref_part.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let (session, task) = match ref_part.split_once('/') {
+        None if is_token(ref_part) => (None, ref_part.to_string()),
+        Some((s, t)) if is_session_component(s) && is_token(t) => {
+            (Some(s.to_string()), t.to_string())
+        }
+        _ => return None,
+    };
+    Some(NeedRef {
+        session,
+        task,
+        condition,
+    })
+}
+
+/// Session names may include dots and Unicode. Keep the reference within one
+/// directory component and exclude the needs-tail delimiters.
+fn is_session_component(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && !s.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '[' | ']' | ',')
+        })
+}
+
+/// Task-id token: ascii alphanumerics, dashes, underscores.
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The `needs:` tail of a board entry as written (`needs: 002, 003 [gate]`), or
+/// `None` when the entry carries none. The tail is the raw text rather than a
+/// re-serialization of the parsed refs - a rendering reprints what the board
+/// says - and it rides the entry only when it parses as the ref list: a gist
+/// that spells the delimiter mid-sentence is no tail, so no prose reaches a
+/// rendering, while a tail the grammar rejects (`needs: ???`) stays in the file
+/// for the card to mark.
+pub fn entry_needs_tail(entry: &str) -> Option<&str> {
+    let (_, tail) = split_needs_tail(entry)?;
+    parse_tail_text(tail).unparseable.is_none().then_some(tail)
+}
+
+/// Sort key for a board entry's id token: numeric when it parses, so `9` sorts
+/// before `10` (ids are not zero-padded); non-numeric ids after numeric ones,
+/// by text.
+fn entry_id_key(entry: &str) -> (Option<u64>, &str) {
+    let id = entry_id(entry).unwrap_or("");
+    (id.parse().ok(), id)
+}
+
+/// Render the board for the `[csm]` snapshot: every non-empty section under its
+/// heading, then one `- <id> <slug>[ needs: ...]` line per task, Done in
+/// numeric id order. The gist and the outcome narrative a board line carries
+/// stay in `tasks/INDEX.md`, so the snapshot is a lean block of heads - and the
+/// cap over it truncates the plan, never a task's prose. A `needs:` tail rides
+/// its line only when it parses as refs, so a gist that spells the delimiter
+/// cannot put prose there. No view marker: views are human-facing, never
+/// injected.
+pub fn render_board(board: &TasksBoard) -> String {
+    let mut out = String::new();
+    for (entries, status) in board.sections() {
+        if entries.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("## ");
+        out.push_str(status.label());
+        out.push('\n');
+        let mut ordered: Vec<&str> = entries.iter().map(String::as_str).collect();
+        if status == Status::Done {
+            ordered.sort_by(|a, b| entry_id_key(a).cmp(&entry_id_key(b)));
+        }
+        for entry in ordered {
+            out.push_str("- ");
+            out.push_str(entry_head(entry));
+            if let Some(tail) = entry_needs_tail(entry) {
+                out.push(' ');
+                out.push_str(tail);
+            }
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Collect task entries per status from `tasks/INDEX.md` content. Layers on
 /// [`crate::markdown::sections`] (the single `## Section` scanner shared with
 /// `csm detail` / `csm show`) so the board and the readers agree on what a
@@ -210,13 +446,10 @@ pub fn entry_id(entry: &str) -> Option<&str> {
 pub fn parse_tasks_board(content: &str) -> TasksBoard {
     let mut board = TasksBoard::default();
     for section in crate::markdown::sections(content) {
-        let entries: &mut Vec<String> = match section.title.as_str() {
-            "Open" => &mut board.open,
-            "Pending review" => &mut board.pending_review,
-            "Pending fix" => &mut board.pending_fix,
-            "Done" => &mut board.done,
-            _ => continue,
+        let Some(status) = Status::from_label(&section.title) else {
+            continue;
         };
+        let entries = board.section_mut(status);
         for line in section.body {
             if let Some(rest) = line.trim_start().strip_prefix('-') {
                 let rest = rest.trim();
@@ -367,7 +600,7 @@ fn tasks_index_template(name: &str) -> String {
 mod tests {
     use super::{
         ensure_workspace, expected_files, list_views, parse_tasks_board, read_context_lines,
-        read_tasks_board, read_tasks_index_md,
+        read_tasks_board, read_tasks_index_md, render_board,
     };
     use crate::store::{session_dir, touch_session};
     use crate::test_support::{with_csm_home, write_board};
@@ -646,6 +879,90 @@ mod tests {
         assert_eq!(entry_head("005 bare"), "005 bare");
     }
 
+    // --- tail grammar ---
+
+    #[test]
+    fn parse_needs_tail_grammar() {
+        use super::{parse_needs_tail, NeedRef, TaskNeeds};
+        assert_eq!(parse_needs_tail("001 x - gist"), TaskNeeds::default());
+
+        let t = parse_needs_tail("002 api - x needs: 001");
+        assert_eq!(t.unparseable, None);
+        assert_eq!(
+            t.refs,
+            vec![NeedRef {
+                session: None,
+                task: "001".into(),
+                condition: None
+            }]
+        );
+
+        let t = parse_needs_tail("004 e2e - x needs: api-contract/012 [interface PR merged], 003");
+        assert_eq!(t.refs.len(), 2);
+        assert_eq!(t.refs[0].session.as_deref(), Some("api-contract"));
+        assert_eq!(t.refs[0].task, "012");
+        assert_eq!(t.refs[0].condition.as_deref(), Some("interface PR merged"));
+        assert_eq!(t.refs[1].task, "003");
+        assert_eq!(t.refs[1].condition, None);
+
+        // A comma inside a condition does not split the ref.
+        let t = parse_needs_tail("005 x - y needs: 001 [a, b]");
+        assert_eq!(t.refs.len(), 1);
+        assert_eq!(t.refs[0].condition.as_deref(), Some("a, b"));
+    }
+
+    #[test]
+    fn parse_needs_tail_rejects_bad_grammar() {
+        use super::parse_needs_tail;
+        for bad in [
+            "001 x - y needs:",
+            "001 x - y needs: 002 003",
+            "001 x - y needs: ???",
+            "001 x - y needs: 002 [unclosed",
+            "001 x - y needs: 002 []",
+            "001 x - y needs: 002 trailing",
+            "001 x - y needs: a//b",
+            "001 x - y needs: /001",
+            "001 x - y needs: ./001",
+            "001 x - y needs: ../001",
+            "001 x - y needs: api/../001",
+            "001 x - y needs: api\\v2/001",
+            "001 x - y needs: 002, ",
+        ] {
+            let t = parse_needs_tail(bad);
+            assert!(t.unparseable.is_some(), "should be unparseable: {bad}");
+            assert!(t.refs.is_empty(), "no refs from {bad}");
+        }
+    }
+
+    /// The tail is the line's last `needs:` occurrence, and only when what
+    /// follows parses as refs. A gist that spells the delimiter therefore
+    /// contributes nothing: no prose reaches the snapshot, and a real tail after
+    /// such a gist still rides the line.
+    #[test]
+    fn entry_needs_tail_takes_the_last_occurrence_only_when_it_parses() {
+        use super::entry_needs_tail;
+        // The delimiter inside the gist, no tail of its own: no tail.
+        assert_eq!(
+            entry_needs_tail("011 prose - spells the tail delimiter needs: and keeps talking"),
+            None
+        );
+        // The delimiter inside the gist, a real tail after it: the tail is the
+        // board's, not the gist's.
+        assert_eq!(
+            entry_needs_tail("010 graph - document the needs: forest needs: 001"),
+            Some("needs: 001")
+        );
+        // A tail the grammar rejects is no tail either - the card marks it `!`
+        // and the file keeps it.
+        assert_eq!(entry_needs_tail("012 bad - x needs: ???"), None);
+        assert_eq!(
+            entry_needs_tail("004 e2e - x needs: 002, 003"),
+            Some("needs: 002, 003")
+        );
+        assert_eq!(entry_needs_tail("005 bare"), None);
+    }
+
     #[test]
     fn unfinished_count_sums_every_live_section() {
         let board = parse_tasks_board(
@@ -707,5 +1024,63 @@ mod tests {
             assert_eq!(board.done.len(), 1);
             assert_eq!(total(&board), 4);
         });
+    }
+
+    // --- the `[csm]` snapshot's board block ---
+
+    #[test]
+    fn render_board_heads_by_section_in_board_order() {
+        let board = parse_tasks_board(
+            "## Open\n- 003 c - a gist the snapshot must not carry\n- 004 d needs: 003\n\n\
+             ## Pending review\n- 005 e - g\n\n## Done\n- 002 b - g\n- 001 a - g\n",
+        );
+        assert_eq!(
+            render_board(&board),
+            "## Open\n- 003 c\n- 004 d needs: 003\n\n\
+             ## Pending review\n- 005 e\n\n## Done\n- 001 a\n- 002 b\n"
+        );
+    }
+
+    #[test]
+    fn render_board_keeps_the_tail_verbatim_and_no_view_marker() {
+        let board = parse_tasks_board(
+            "## Open\n- 004 e2e - g needs: api-contract/012 [interface PR merged], 003\n",
+        );
+        let rendered = render_board(&board);
+        assert_eq!(
+            rendered,
+            "## Open\n- 004 e2e needs: api-contract/012 [interface PR merged], 003\n"
+        );
+        assert!(!rendered.contains(crate::ui::T_VIEW));
+    }
+
+    /// A gist that spells the tail delimiter - backticked in the file, so inline
+    /// stripping leaves a bare word - contributes its head alone, and a real
+    /// tail after such a gist still rides its line.
+    #[test]
+    fn render_board_drops_a_gist_that_spells_the_tail_delimiter() {
+        let board = parse_tasks_board(
+            "## Open\n\
+             - 011 prose - a gist that spells the `needs:` delimiter and then keeps talking\n\
+             - 010 graph - document the `needs:` forest and how it renders needs: 001\n\
+             - 012 bad - x needs: ???\n",
+        );
+        assert_eq!(
+            render_board(&board),
+            "## Open\n- 011 prose\n- 010 graph needs: 001\n- 012 bad\n"
+        );
+    }
+
+    #[test]
+    fn render_board_omits_empty_sections() {
+        // A fresh board has headings but no tasks: the block carries nothing,
+        // so no label pretends there is a line under it.
+        assert_eq!(render_board(&parse_tasks_board("## Open\n\n## Done\n")), "");
+        assert_eq!(
+            render_board(&parse_tasks_board(
+                "## Open\n- 001 a\n\n## Pending review\n"
+            )),
+            "## Open\n- 001 a\n"
+        );
     }
 }

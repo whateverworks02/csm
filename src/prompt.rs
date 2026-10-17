@@ -52,6 +52,7 @@ Questions, reviews, and modifications belong to the task they concern. A new tas
 - `state.md` - session one-pager. Sections: Context (what this session is + current focus), Key links. Not a log; task detail lives in `tasks/`.
 - `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed and reviewed locally; PR creation, CI, approval, and merge are not part of that status. Later code changes alone do not reopen a historical Done task; requested changes follow the table. Move a task's line between sections to change its status. Within a section, line order = execution order; ids are stable handles. A new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board alone carries the plan.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
+- A board line - `<id> <slug> - <gist>`, with the `needs:` tail last. The `[csm]` block renders the board by section, each task's head and `needs:` tail only: a line's gist and its progress narrative stay in `tasks/INDEX.md`, which is where a task's description is read.
 - `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. Progress records outcomes: what changed, where (files/PR), and what remains; never a timestamped diary. Status lives only in INDEX.
 - `References:` / `View:` lines - optional header lines under the task file's title (omitted when unused): `References: <slug>[, <slug>]` names the `notes/` articles the task rests on (bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews), and `View: <id>-<slug>.html` points to `views/<id>-<slug>.html` when the task warrants a view. `References:` carries the why (design rationale, provenance, adjudications); the what stays in Scope/AC/SOP. Read-side only: a note you plan to write is prose in SOP. The coordinator sets both lines when creating the task; a worker adds a reference they write or discover. Neither line gates claiming - the `needs:` tail owns gating.
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry, one gist line per article describing the article alone. Which tasks rest on a note lives in those tasks' `References:`, so the registry never enumerates task ids.
@@ -441,5 +442,17 @@ mod tests {
         assert!(block.contains("requires verified evidence"));
         assert!(block.contains("Reordering changes no `needs:`"));
         assert!(block.contains("dropping a task fixes or removes the refs pointing at it"));
+    }
+
+    #[test]
+    fn csm_block_carries_the_board_rendering() {
+        let block = csm_block("/home/user/.csm");
+        // The line's own shape, and where its prose lives.
+        assert!(
+            block.contains("- A board line - `<id> <slug> - <gist>`, with the `needs:` tail last.")
+        );
+        // The snapshot renders heads by section, so a gist is read from the file.
+        assert!(block.contains("The `[csm]` block renders the board by section, each task's head and `needs:` tail only"));
+        assert!(block.contains("a line's gist and its progress narrative stay in `tasks/INDEX.md`"));
     }
 }
