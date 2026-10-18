@@ -108,8 +108,7 @@ pub fn read_state_md(name: &str) -> Option<String> {
 }
 
 /// Read the raw `tasks/INDEX.md` board. `None` if the file is absent (a
-/// pre-tasks-model session, or a ghost with no workspace). Used by `csm detail`
-/// (render the full board) and the hook snapshot.
+/// pre-tasks-model session, or a ghost with no workspace).
 pub fn read_tasks_index_md(name: &str) -> Option<String> {
     let path = session_dir(name).ok()?.join("tasks/INDEX.md");
     fs::read_to_string(path).ok()
@@ -437,8 +436,7 @@ pub fn render_board(board: &TasksBoard) -> String {
 }
 
 /// Collect task entries per status from `tasks/INDEX.md` content. Layers on
-/// [`crate::markdown::sections`] (the single `## Section` scanner shared with
-/// `csm detail` / `csm show`) so the board and the readers agree on what a
+/// [`crate::markdown::sections`] so the board and the readers agree on what a
 /// section is. A task entry is a body line whose first non-space char is `-`
 /// with non-empty content after it; comment-only lines are already dropped by
 /// `sections`, and unknown sections are ignored (forward-compatible with
@@ -475,10 +473,9 @@ pub fn read_tasks_board(name: &str) -> Option<TasksBoard> {
 /// Capped at `max_lines`. Falls back to a legacy `## Task` section if Context
 /// is absent (pre-tasks-model sessions). Empty vec if neither section exists.
 ///
-/// Layers on `markdown::sections` (the single `## Section` scanner shared with
-/// `csm detail`) instead of re-scanning: find the Context (or legacy Task)
-/// section, take its first paragraph, cap it. Each line is trimmed to match the
-/// prior `strip_inline(line.trim())` behavior.
+/// Layers on `markdown::sections` instead of re-scanning: find the Context (or
+/// legacy Task) section, take its first paragraph, cap it. Each line is trimmed
+/// to match the prior `strip_inline(line.trim())` behavior.
 pub fn read_context_lines(name: &str, max_lines: usize) -> Vec<String> {
     let content = match read_state_md(name) {
         Some(c) => c,
@@ -836,8 +833,8 @@ mod tests {
     #[test]
     fn parse_tasks_board_tolerates_needs_tail() {
         // The `needs:` dependency tail rides at the end of the task line: still
-        // one entry per line, tail preserved verbatim (so `csm detail` shows the
-        // mapping, and the card's `id slug` head is unaffected).
+        // one entry per line, tail preserved verbatim (so the board file keeps
+        // the mapping, and the card's `id slug` head is unaffected).
         let board = parse_tasks_board(
             "## Open\n\
              - 004 integration - wire the client needs: api-contract/012 [interface PR merged]\n\
