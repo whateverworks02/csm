@@ -302,8 +302,8 @@ mod tests {
             scaffold_session("busy");
             write_board(
                 "busy",
-                "## Open\n- 001 live - x\n\n## Pending review\n- 002 live - y\n\n\
-                 ## Done\n- 000 old - x\n",
+                "## Open\n- 001 live\n\n## Pending review\n- 002 live\n\n\
+                 ## Done\n- 000 old\n",
             );
             backdate("busy", 10);
             scaffold_session("idle"); // fresh scaffold: empty board
@@ -321,7 +321,7 @@ mod tests {
         with_csm_home(|_dir| {
             for (name, section) in [("review", "Pending review"), ("fix", "Pending fix")] {
                 scaffold_session(name);
-                write_board(name, &format!("## {section}\n- 001 live - x\n"));
+                write_board(name, &format!("## {section}\n- 001 live\n"));
                 backdate(name, 10);
             }
             run(Some(5), true).unwrap();
@@ -337,10 +337,7 @@ mod tests {
     fn all_done_board_is_collected() {
         with_csm_home(|_dir| {
             scaffold_session("finished");
-            write_board(
-                "finished",
-                "## Done\n- 001 x - shipped\n- 002 y - shipped\n",
-            );
+            write_board("finished", "## Done\n- 001 x\n- 002 y\n");
             backdate("finished", 10);
             run(Some(5), true).unwrap();
             assert!(

@@ -119,8 +119,7 @@ pub fn read_tasks_index_md(name: &str) -> Option<String> {
 /// (Pending review) vs done. `csm show` renders the whole board as the tasks
 /// block (live tasks as forest roots, done as a dim line); entries not listed
 /// in INDEX are invisible there - keep INDEX current. Each entry is the text
-/// after the leading `- ` (e.g. `001 fix-cookie-set - wire SameSite`); the
-/// card formats it to `id slug`.
+/// after the leading `- ` (e.g. `001 fix-cookie-set`).
 #[derive(Default)]
 pub struct TasksBoard {
     pub open: Vec<String>,
@@ -234,20 +233,17 @@ fn split_needs_tail(entry: &str) -> Option<(&str, &str)> {
     Some((&entry[..at], entry[at..].trim()))
 }
 
-/// The `id slug` head of a board entry: the text before the `needs:` tail
-/// (which ends the line per the `needs:` protocol) and before the ` - gist`
-/// separator. Shared by the card rows, the needs view, and the snapshot so one
-/// format rule has one home.
+/// The `id slug` head of a board entry: the text before the `needs:` tail,
+/// which ends the line per the `needs:` protocol. Shared by the card rows, the
+/// needs view, and the snapshot so one format rule has one home.
 pub fn entry_head(entry: &str) -> &str {
-    let head = split_needs_tail(entry).map_or(entry, |(head, _)| head);
-    head.split_once(" - ")
-        .map(|(h, _)| h)
-        .unwrap_or(head)
+    split_needs_tail(entry)
+        .map_or(entry, |(head, _)| head)
         .trim()
 }
 
 /// First whitespace token of a board entry's head (`001` from
-/// `001 fix-cookie-set - wire SameSite`); `None` for entries without one.
+/// `001 fix-cookie-set`); `None` for entries without one.
 pub fn entry_id(entry: &str) -> Option<&str> {
     entry_head(entry).split_whitespace().next()
 }
@@ -381,10 +377,8 @@ fn is_token(s: &str) -> bool {
 /// The `needs:` tail of a board entry as written (`needs: 002, 003 [gate]`), or
 /// `None` when the entry carries none. The tail is the raw text rather than a
 /// re-serialization of the parsed refs - a rendering reprints what the board
-/// says - and it rides the entry only when it parses as the ref list: a gist
-/// that spells the delimiter mid-sentence is no tail, so no prose reaches a
-/// rendering, while a tail the grammar rejects (`needs: ???`) stays in the file
-/// for the card to mark.
+/// says - and it rides the entry only when it parses as the ref list: a tail the
+/// grammar rejects (`needs: ???`) stays in the file for the card to mark.
 pub fn entry_needs_tail(entry: &str) -> Option<&str> {
     let (_, tail) = split_needs_tail(entry)?;
     parse_tail_text(tail).unparseable.is_none().then_some(tail)
@@ -400,12 +394,9 @@ fn entry_id_key(entry: &str) -> (Option<u64>, &str) {
 
 /// Render the board for the `[csm]` snapshot: every non-empty section under its
 /// heading, then one `- <id> <slug>[ needs: ...]` line per task, Done in
-/// numeric id order. The gist and the outcome narrative a board line carries
-/// stay in `tasks/INDEX.md`, so the snapshot is a lean block of heads - and the
-/// cap over it truncates the plan, never a task's prose. A `needs:` tail rides
-/// its line only when it parses as refs, so a gist that spells the delimiter
-/// cannot put prose there. No view marker: views are human-facing, never
-/// injected.
+/// numeric id order. A board line is its head and its `needs:` tail, so the
+/// snapshot is a lean block of heads. A tail rides its line only when it parses
+/// as refs. No view marker: views are human-facing, never injected.
 pub fn render_board(board: &TasksBoard) -> String {
     let mut out = String::new();
     for (entries, status) in board.sections() {
@@ -582,7 +573,7 @@ fn tasks_index_template(name: &str) -> String {
 > Each task: tasks/<id>-<slug>.md. Status = section.
 
 ## Open
-<!-- - 001 <slug> - <gist> -->
+<!-- - 001 <slug> -->
 
 ## Pending review
 
@@ -800,9 +791,9 @@ mod tests {
     #[test]
     fn parse_tasks_board_collects_entries_by_status() {
         let board = parse_tasks_board(
-            "# ws - tasks board\n\n> q\n\n## Open\n- 001 refactor - slim state\n\
-             - 002 prompt - review loop\n\n## Pending review\n- 003 doctor check\n\n\
-             ## Pending fix\n\n## Done\n- 000 init - scaffold\n",
+            "# ws - tasks board\n\n> q\n\n## Open\n- 001 refactor\n\
+             - 002 prompt\n\n## Pending review\n- 003 doctor check\n\n\
+             ## Pending fix\n\n## Done\n- 000 init\n",
         );
         assert_eq!(board.open.len(), 2);
         assert_eq!(board.pending_review.len(), 1);
@@ -810,17 +801,15 @@ mod tests {
         assert_eq!(board.done.len(), 1);
         assert_eq!(total(&board), 4);
         // Entry stored is the text after `- `.
-        assert_eq!(board.open[0], "001 refactor - slim state");
-        assert_eq!(board.done[0], "000 init - scaffold");
+        assert_eq!(board.open[0], "001 refactor");
+        assert_eq!(board.done[0], "000 init");
     }
 
     #[test]
     fn parse_tasks_board_drops_comments_and_unknown_sections() {
-        // The scaffold template has a commented example under Open and empty
-        // statuses - a fresh board should parse to all-empty.
-        let fresh = "# ws - tasks board\n\n> Status board. ...\n\n## Open\n\
-                     <!-- - 001 <slug> - <gist> -->\n\n## Pending review\n\n## Pending fix\n\n## Done\n";
-        let board = parse_tasks_board(fresh);
+        // The scaffolded template carries a commented example under Open and
+        // empty statuses - a fresh board should parse to all-empty.
+        let board = parse_tasks_board(&super::tasks_index_template("ws"));
         assert_eq!(total(&board), 0);
         // Unknown sections are ignored, not panic.
         let with_extra = "# ws\n\n## Open\n- 001 x\n\n## Archived\n- old\n\n## Done\n- 000 y\n";
@@ -837,42 +826,35 @@ mod tests {
         // the mapping, and the card's `id slug` head is unaffected).
         let board = parse_tasks_board(
             "## Open\n\
-             - 004 integration - wire the client needs: api-contract/012 [interface PR merged]\n\
-             - 005 docs - document the endpoint needs: 002, 003\n\n\
-             ## Done\n- 002 api - implement the endpoint\n",
+             - 004 integration needs: api-contract/012 [interface PR merged]\n\
+             - 005 docs needs: 002, 003\n\n\
+             ## Done\n- 002 api\n",
         );
         assert_eq!(board.open.len(), 2);
         assert_eq!(board.done.len(), 1);
         assert_eq!(total(&board), 3);
         assert_eq!(
             board.open[0],
-            "004 integration - wire the client needs: api-contract/012 [interface PR merged]"
+            "004 integration needs: api-contract/012 [interface PR merged]"
         );
-        assert_eq!(
-            board.open[1],
-            "005 docs - document the endpoint needs: 002, 003"
-        );
+        assert_eq!(board.open[1], "005 docs needs: 002, 003");
     }
 
     #[test]
     fn parse_tasks_board_collects_bold_entries() {
-        // sections() inline-strips, so a `**bold**` gist still counts as an entry.
-        let board = parse_tasks_board("## Open\n- 001 **refactor** - slim\n");
+        // sections() inline-strips, so a `**bold**` slug still counts as an entry.
+        let board = parse_tasks_board("## Open\n- 001 **refactor**\n");
         assert_eq!(board.open.len(), 1);
     }
 
     #[test]
-    fn entry_head_strips_gist_and_needs_tail() {
+    fn entry_head_takes_the_text_before_the_needs_tail() {
         use super::entry_head;
-        assert_eq!(
-            entry_head("001 fix-cookie - wire SameSite"),
-            "001 fix-cookie"
-        );
         assert_eq!(
             entry_head("003 doctor check needs: 001"),
             "003 doctor check"
         );
-        assert_eq!(entry_head("004 e2e - x needs: 002, 003 [gate]"), "004 e2e");
+        assert_eq!(entry_head("004 e2e needs: 002, 003 [gate]"), "004 e2e");
         assert_eq!(entry_head("005 bare"), "005 bare");
     }
 
@@ -881,9 +863,9 @@ mod tests {
     #[test]
     fn parse_needs_tail_grammar() {
         use super::{parse_needs_tail, NeedRef, TaskNeeds};
-        assert_eq!(parse_needs_tail("001 x - gist"), TaskNeeds::default());
+        assert_eq!(parse_needs_tail("001 x"), TaskNeeds::default());
 
-        let t = parse_needs_tail("002 api - x needs: 001");
+        let t = parse_needs_tail("002 api needs: 001");
         assert_eq!(t.unparseable, None);
         assert_eq!(
             t.refs,
@@ -894,7 +876,7 @@ mod tests {
             }]
         );
 
-        let t = parse_needs_tail("004 e2e - x needs: api-contract/012 [interface PR merged], 003");
+        let t = parse_needs_tail("004 e2e needs: api-contract/012 [interface PR merged], 003");
         assert_eq!(t.refs.len(), 2);
         assert_eq!(t.refs[0].session.as_deref(), Some("api-contract"));
         assert_eq!(t.refs[0].task, "012");
@@ -903,7 +885,7 @@ mod tests {
         assert_eq!(t.refs[1].condition, None);
 
         // A comma inside a condition does not split the ref.
-        let t = parse_needs_tail("005 x - y needs: 001 [a, b]");
+        let t = parse_needs_tail("005 x needs: 001 [a, b]");
         assert_eq!(t.refs.len(), 1);
         assert_eq!(t.refs[0].condition.as_deref(), Some("a, b"));
     }
@@ -912,19 +894,19 @@ mod tests {
     fn parse_needs_tail_rejects_bad_grammar() {
         use super::parse_needs_tail;
         for bad in [
-            "001 x - y needs:",
-            "001 x - y needs: 002 003",
-            "001 x - y needs: ???",
-            "001 x - y needs: 002 [unclosed",
-            "001 x - y needs: 002 []",
-            "001 x - y needs: 002 trailing",
-            "001 x - y needs: a//b",
-            "001 x - y needs: /001",
-            "001 x - y needs: ./001",
-            "001 x - y needs: ../001",
-            "001 x - y needs: api/../001",
-            "001 x - y needs: api\\v2/001",
-            "001 x - y needs: 002, ",
+            "001 x needs:",
+            "001 x needs: 002 003",
+            "001 x needs: ???",
+            "001 x needs: 002 [unclosed",
+            "001 x needs: 002 []",
+            "001 x needs: 002 trailing",
+            "001 x needs: a//b",
+            "001 x needs: /001",
+            "001 x needs: ./001",
+            "001 x needs: ../001",
+            "001 x needs: api/../001",
+            "001 x needs: api\\v2/001",
+            "001 x needs: 002, ",
         ] {
             let t = parse_needs_tail(bad);
             assert!(t.unparseable.is_some(), "should be unparseable: {bad}");
@@ -932,32 +914,30 @@ mod tests {
         }
     }
 
-    /// The tail is the line's last `needs:` occurrence, and only when what
-    /// follows parses as refs. A gist that spells the delimiter therefore
-    /// contributes nothing: no prose reaches the snapshot, and a real tail after
-    /// such a gist still rides the line.
+    /// The tail rides the line only when what follows the delimiter parses as
+    /// refs: a tail the grammar rejects contributes nothing, so the card can
+    /// mark it.
     #[test]
-    fn entry_needs_tail_takes_the_last_occurrence_only_when_it_parses() {
+    fn entry_needs_tail_rides_the_line_only_when_it_parses() {
         use super::entry_needs_tail;
-        // The delimiter inside the gist, no tail of its own: no tail.
         assert_eq!(
-            entry_needs_tail("011 prose - spells the tail delimiter needs: and keeps talking"),
-            None
+            entry_needs_tail("004 e2e needs: 002, 003"),
+            Some("needs: 002, 003")
         );
-        // The delimiter inside the gist, a real tail after it: the tail is the
-        // board's, not the gist's.
+        // A tail the grammar rejects is no tail either - the card marks it `!`
+        // and the file keeps it.
+        assert_eq!(entry_needs_tail("012 bad needs: ???"), None);
+        assert_eq!(entry_needs_tail("005 bare"), None);
+    }
+
+    /// The tail is the line's last `needs:` occurrence, not its first.
+    #[test]
+    fn entry_needs_tail_takes_the_line_s_last_occurrence() {
+        use super::entry_needs_tail;
         assert_eq!(
             entry_needs_tail("010 graph - document the needs: forest needs: 001"),
             Some("needs: 001")
         );
-        // A tail the grammar rejects is no tail either - the card marks it `!`
-        // and the file keeps it.
-        assert_eq!(entry_needs_tail("012 bad - x needs: ???"), None);
-        assert_eq!(
-            entry_needs_tail("004 e2e - x needs: 002, 003"),
-            Some("needs: 002, 003")
-        );
-        assert_eq!(entry_needs_tail("005 bare"), None);
     }
 
     #[test]
@@ -977,7 +957,7 @@ mod tests {
     #[test]
     fn status_of_finds_entries_across_sections() {
         use super::Status;
-        let board = parse_tasks_board("## Open\n- 001 a needs: 002\n\n## Done\n- 002 b - x\n");
+        let board = parse_tasks_board("## Open\n- 001 a needs: 002\n\n## Done\n- 002 b\n");
         assert_eq!(board.status_of("001"), Some(Status::Open));
         assert_eq!(board.status_of("002"), Some(Status::Done));
         assert_eq!(board.status_of("003"), None);
@@ -1028,8 +1008,8 @@ mod tests {
     #[test]
     fn render_board_heads_by_section_in_board_order() {
         let board = parse_tasks_board(
-            "## Open\n- 003 c - a gist the snapshot must not carry\n- 004 d needs: 003\n\n\
-             ## Pending review\n- 005 e - g\n\n## Done\n- 002 b - g\n- 001 a - g\n",
+            "## Open\n- 003 c\n- 004 d needs: 003\n\n\
+             ## Pending review\n- 005 e\n\n## Done\n- 002 b\n- 001 a\n",
         );
         assert_eq!(
             render_board(&board),
@@ -1041,7 +1021,7 @@ mod tests {
     #[test]
     fn render_board_keeps_the_tail_verbatim_and_no_view_marker() {
         let board = parse_tasks_board(
-            "## Open\n- 004 e2e - g needs: api-contract/012 [interface PR merged], 003\n",
+            "## Open\n- 004 e2e needs: api-contract/012 [interface PR merged], 003\n",
         );
         let rendered = render_board(&board);
         assert_eq!(
@@ -1051,21 +1031,12 @@ mod tests {
         assert!(!rendered.contains(crate::ui::T_VIEW));
     }
 
-    /// A gist that spells the tail delimiter - backticked in the file, so inline
-    /// stripping leaves a bare word - contributes its head alone, and a real
-    /// tail after such a gist still rides its line.
+    /// A tail the grammar rejects is no tail: the line renders as its head alone,
+    /// and the file keeps the text for the card to mark.
     #[test]
-    fn render_board_drops_a_gist_that_spells_the_tail_delimiter() {
-        let board = parse_tasks_board(
-            "## Open\n\
-             - 011 prose - a gist that spells the `needs:` delimiter and then keeps talking\n\
-             - 010 graph - document the `needs:` forest and how it renders needs: 001\n\
-             - 012 bad - x needs: ???\n",
-        );
-        assert_eq!(
-            render_board(&board),
-            "## Open\n- 011 prose\n- 010 graph needs: 001\n- 012 bad\n"
-        );
+    fn render_board_drops_a_tail_the_grammar_rejects() {
+        let board = parse_tasks_board("## Open\n- 012 bad needs: ???\n");
+        assert_eq!(render_board(&board), "## Open\n- 012 bad\n");
     }
 
     #[test]
