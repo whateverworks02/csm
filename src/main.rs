@@ -74,12 +74,6 @@ enum Cmd {
         name: Option<String>,
     },
 
-    /// Render a session's full state.md, read-only (the deep read).
-    Detail {
-        /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
-        name: Option<String>,
-    },
-
     /// Garbage-collect unpinned sessions; sessions whose board still holds
     /// unfinished tasks are kept.
     Gc {
@@ -155,7 +149,6 @@ fn try_main() -> Result<()> {
         Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
         Some(Cmd::Rename { old, new }) => cmd_rename(&old, &new),
         Some(Cmd::Show { name }) => cmd_show(name),
-        Some(Cmd::Detail { name }) => cmd_detail(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
         Some(Cmd::Doctor { fix, yes }) => doctor::run(fix, yes),
         Some(Cmd::Init) => cmd_init(),
@@ -682,8 +675,8 @@ fn head_id_key(head: &str) -> (Option<u64>, &str) {
 
 /// How many done tasks the card's Done section lists before folding the rest
 /// into a `… +K more` tail. The summary bar already carries the count; the
-/// section is there to find a finished task, not to read the archive
-/// (`csm detail` renders the raw board).
+/// section is there to find a finished task, not to read the archive (the raw
+/// `tasks/INDEX.md` holds the rest).
 const DONE_LINES_MAX: usize = 8;
 
 /// The tasks block's Done section: the section label, then one dim
@@ -718,67 +711,6 @@ fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>)
         lines.push(ui::paint(ui::DIM, &format!("… +{hidden} more")));
     }
     lines
-}
-
-/// `csm detail [name]`: render a session's full `state.md` read-only - the deep
-/// read to complement `csm show`'s recognition card. Name resolution mirrors
-/// `csm show` (explicit arg > `$CSM_SESSION` > picker), shared via
-/// `resolve_session_name`. Each `## Section` becomes a bold header + an
-/// inline-stripped body (cargo aesthetic: color, not icons; no raw markdown).
-fn cmd_detail(name: Option<String>) -> Result<()> {
-    let Some(name) = resolve_session_name(name)? else {
-        return Ok(());
-    };
-    let meta = store::require_session(&name)?;
-
-    // Header: name + last-access for context. (origin/pinned live in `show`.)
-    println!(
-        "{}  {}",
-        ui::paint(ui::CYAN_BOLD, &name),
-        ui::paint(ui::DIM, &store::format_ts(&meta.last_access)),
-    );
-
-    let content = match workspace::read_state_md(&name) {
-        Some(c) => c,
-        None => {
-            eprintln!(
-                "{}",
-                ui::epaint(ui::DIM, &format!("no state.md for session `{name}`")),
-            );
-            return Ok(());
-        }
-    };
-
-    print_sections(markdown::sections(&content));
-
-    // The task board - the operational center. The deep read includes it so an
-    // orienting coordinator/worker sees the full status board, not just the
-    // state one-pager. Empty sections render as `(none)`, consistent with
-    // state.md - that's the healthy-state signal, not noise.
-    if let Some(board_content) = workspace::read_tasks_index_md(&name) {
-        println!("{}", ui::paint(ui::BOLD, "tasks"));
-        println!();
-        print_sections(markdown::sections(&board_content));
-    }
-    Ok(())
-}
-
-/// Render `## Section`s as a bold header + body (cargo aesthetic), each
-/// followed by a blank line; an empty body shows a dim `(none)`. Shared by
-/// `csm detail` for state.md and the tasks/INDEX.md board so the two render
-/// identically.
-fn print_sections(sections: Vec<markdown::Section>) {
-    for section in sections {
-        println!("{}", ui::paint(ui::BOLD, &section.title));
-        if section.body.is_empty() {
-            println!("  {}", ui::paint(ui::DIM, "(none)"));
-        } else {
-            for line in &section.body {
-                println!("{line}");
-            }
-        }
-        println!();
-    }
 }
 
 fn cmd_init() -> Result<()> {

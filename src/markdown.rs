@@ -2,11 +2,10 @@
 //! display truncation (`truncate`).
 //!
 //! `sections` splits a document into `## `-headed sections with inline markers
-//! stripped. It serves both display (`csm detail` renders state.md and the task
-//! board) and data extraction (`parse_tasks_board`, `read_context_lines` read
-//! workspace files). `truncate` caps a line for the `csm show` card. No styling
-//! here (that lives in `ui`), no Unicode glyphs - plain text that
-//! `cmd_show`/`cmd_detail` wrap in cargo-style color.
+//! stripped; it is the single scanner the workspace readers (`parse_tasks_board`,
+//! `read_context_lines`) share. `truncate` caps a line for the `csm show` card.
+//! No styling here (that lives in `ui`), no Unicode glyphs - plain text that
+//! `cmd_show` wraps in cargo-style color.
 
 /// Strip inline markdown markers from `text`, returning plain text. Unmatched
 /// markers (e.g. a lone `*`) are left literal.
@@ -101,9 +100,9 @@ pub fn truncate(s: &str, max: usize) -> String {
 }
 
 /// A `## Section` of a state.md: its title (text after `## `) and the body
-/// lines under it, each with inline markdown stripped. `csm detail` renders one
-/// per section. The H1 title and `>` quote boilerplate before the first section
-/// are dropped; genuine blank lines are kept as paragraph breaks.
+/// lines under it, each with inline markdown stripped. The H1 title and `>`
+/// quote boilerplate before the first section are dropped; genuine blank lines
+/// are kept as paragraph breaks.
 pub struct Section {
     pub title: String,
     pub body: Vec<String>,
