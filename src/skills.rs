@@ -42,7 +42,7 @@ Use the mission, `state.md`, the board, and relevant notes to plan the work. The
 1. **Resolve decisions.** Identify decisions that affect the plan. Use available evidence; investigate missing facts with targeted code reads. Ask the user for unresolved choices requiring their judgment, grouping questions with options and tradeoffs. Continue when the proposed work has a supported scope; record unresolved prerequisites for any deferred work.
 2. **Decompose.** Create or revise tasks around independently verifiable outcomes. Record each task's real preconditions in the board's `needs:` tail according to the working protocol. Each task has a bounded Scope and AC a reviewer can verify.
 3. **Write the SOP.** Apply the working protocol's record depth. Name the files, operations, and conventions needed to execute the task, with exact commands where useful. Each step ends with an observable completion criterion; the procedure covers the task's AC.
-4. **Update context.** Update `state.md` Context and Key links where the mission, approach, or current focus changed. Retain rationale needed to guide subsequent work; the resulting one-pager describes the current plan.
+4. **Update context.** Rewrite `state.md` `Context` in place as one short paragraph - the session's mission and current focus - when either changed, and update `Key links` where the durable links changed. Put design rationale and rulings in `notes/` or the task's `Scope`, not in `Context`.
 5. **Done when:** tasks created or revised in this pass have supported Scope, verifiable AC, executable SOP, and dependencies recorded under the working protocol. New tasks enter Open; existing tasks retain their status unless an actual lifecycle transition occurred. Unresolved prerequisites are explicit, and context reflects the plan.
 
 "#;
@@ -255,6 +255,12 @@ mod tests {
             assert!(PLAN_SKILL_MD.contains("choices requiring their judgment"));
             assert!(PLAN_SKILL_MD.contains("Apply the working protocol's record depth"));
             assert!(PLAN_SKILL_MD.contains("existing tasks retain their status"));
+            // Step 4 keeps Context a short in-place paragraph and routes
+            // rationale/rulings to notes or the task, not into state.md.
+            assert!(!PLAN_SKILL_MD.contains("Retain rationale needed to guide subsequent work"));
+            assert!(PLAN_SKILL_MD.contains(
+                "Rewrite `state.md` `Context` in place as one short paragraph - the session's mission and current focus - when either changed, and update `Key links` where the durable links changed. Put design rationale and rulings in `notes/` or the task's `Scope`, not in `Context`."
+            ));
             assert!(!PLAN_SKILL_MD.contains("every INDEX line sits under Open"));
             assert!(!PLAN_SKILL_MD.contains("marked uncertain"));
             // The targeted-verification entry stays open: code reads are not
