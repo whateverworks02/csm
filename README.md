@@ -67,7 +67,6 @@ cso() { csm "$@" -a opencode; }
 | `csm [-a <agent>]` | Pick a session whose origin is this directory |
 | `csm list` | List all sessions |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
-| `csm detail [name]` | Full `state.md` + task board render |
 | `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
 | `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
 | `csm rename <old> <new>` | Rename and re-home to the current directory |
@@ -75,7 +74,7 @@ cso() { csm "$@" -a opencode; }
 | `csm gc [--older-than N]` | Collect unpinned sessions (unfinished boards are kept) |
 | `csm doctor [--fix]` | Diagnose consistency and agent wiring; `--fix` repairs consistency |
 
-`show` and `detail` default to `$CSM_SESSION`, else open a picker.
+`show` defaults to `$CSM_SESSION`, else opens a picker.
 
 ## The workspace
 
@@ -154,7 +153,7 @@ A plan request ends once the plan is recorded, execution ends at `Pending review
   claimable   002
 ```
 
-Marks: `○` open, `◐` pending review, `◑` pending fix, `✓` done, `◆` the task has a view, `(unverified)` a `[condition]` whose evidence isn't recorded, `(missing)` an unresolvable ref. `claimable` lists what can be started now; `csm detail` renders the whole board where `show` caps the `Done` list.
+Marks: `○` open, `◐` pending review, `◑` pending fix, `✓` done, `◆` the task has a view, `(unverified)` a `[condition]` whose evidence isn't recorded, `(missing)` an unresolvable ref. `claimable` lists what can be started now; `Done` caps its list and folds the rest into `… +K more`.
 
 ## Skills
 
