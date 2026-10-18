@@ -50,14 +50,13 @@ fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
 
 /// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
 /// (capped), and the `tasks/INDEX.md` board (capped and rendered - the board's
-/// sections, each task's head and `needs:` tail, never the file's gist or
-/// progress prose). This is the lean orientation memory: the prompt tells the
-/// agent these two files are the orientation surface and that the `[csm]` block
-/// is "only a snapshot of these", so the snapshot must include both. The agent
-/// discovers the `scripts/`, `notes/` and `views/` corpora through the
-/// filesystem and their INDEXes (the working-mode prompt points at them), so
-/// they aren't injected here. Used by both the SessionStart hook (`run_hook`)
-/// and the pi launch adapter.
+/// sections, each task's head and `needs:` tail). This is the lean orientation
+/// memory: the prompt tells the agent these two files are the orientation
+/// surface and that the `[csm]` block is "only a snapshot of these", so the
+/// snapshot must include both. The agent discovers the `scripts/`, `notes/` and
+/// `views/` corpora through the filesystem and their INDEXes (the working-mode
+/// prompt points at them), so they aren't injected here. Used by both the
+/// SessionStart hook (`run_hook`) and the pi launch adapter.
 pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
@@ -98,9 +97,7 @@ fn read_state_capped(name: &str) -> String {
 }
 
 /// The board's snapshot: [`workspace::render_board`]'s rendering, capped. The
-/// block carries the board's sections with one head line per task; the file
-/// keeps the full lines, so the cap falls on the plan's heads rather than on a
-/// task's outcome prose.
+/// block carries the board's sections with one head line per task.
 fn read_tasks_capped(name: &str) -> String {
     let rendered = workspace::read_tasks_board(name).map(|board| workspace::render_board(&board));
     read_capped(rendered, TASKS_CAP, "tasks/INDEX.md")
@@ -143,7 +140,7 @@ mod tests {
 
     /// The board reaches the agent as a rendering, not as the file: the board's
     /// sections in board order, one head line per task with its `needs:` tail,
-    /// Done in numeric id order - and none of the prose a line carries.
+    /// Done in numeric id order.
     #[test]
     #[serial]
     fn build_context_renders_the_board_by_section() {
@@ -151,9 +148,9 @@ mod tests {
             seed_session("ws", "state");
             crate::test_support::write_board(
                 "ws",
-                "## Open\n- 003 c - a gist the block must not carry\n- 004 d needs: 003\n\n\
-                 ## Pending review\n- 005 e - g\n\n## Pending fix\n- 006 f - g\n\n\
-                 ## Done\n- 002 b - g\n- 001 a - g\n",
+                "## Open\n- 003 c\n- 004 d needs: 003\n\n\
+                 ## Pending review\n- 005 e\n\n## Pending fix\n- 006 f\n\n\
+                 ## Done\n- 002 b\n- 001 a\n",
             );
             // A view on a live task: views are human-facing, so no marker
             // reaches the snapshot.
@@ -167,29 +164,7 @@ mod tests {
                 "\n## Open\n- 003 c\n- 004 d needs: 003\n\n## Pending review\n- 005 e\n\n\
                  ## Pending fix\n- 006 f\n\n## Done\n- 001 a\n- 002 b\n"
             );
-            assert!(!block.contains("a gist the block must not carry"));
             assert!(!block.contains(crate::ui::T_VIEW));
-        });
-    }
-
-    /// A board line whose gist spells the tail delimiter - backticked in the
-    /// file, so inline stripping leaves a bare word - contributes its head
-    /// alone: no gist or progress prose reaches the snapshot, and a real tail
-    /// after such a gist still rides its line.
-    #[test]
-    #[serial]
-    fn build_context_renders_heads_for_a_gist_that_spells_the_delimiter() {
-        with_csm_home(|_dir| {
-            seed_session("ws", "state");
-            crate::test_support::write_board(
-                "ws",
-                "## Open\n\
-                 - 003 c - a gist that spells the `needs:` delimiter and then keeps talking\n\
-                 - 004 d - the `needs:` forest, and how it renders needs: 003\n",
-            );
-            let ctx = build_context("ws");
-            let block = ctx.split("--- tasks/INDEX.md ---").nth(1).unwrap();
-            assert_eq!(block, "\n## Open\n- 003 c\n- 004 d needs: 003\n");
         });
     }
 
@@ -238,7 +213,7 @@ mod tests {
                 "...(tasks/INDEX.md truncated; full file at the workspace directory)..."
             ));
             // Exactly TASKS_CAP chars of the rendered block survive; the last
-            // task is cut, so the cap falls on heads and not on prose.
+            // task is cut.
             let rendered = workspace::render_board(&workspace::parse_tasks_board(&md));
             assert!(rendered.chars().count() > TASKS_CAP);
             let kept: String = rendered.chars().take(TASKS_CAP).collect();

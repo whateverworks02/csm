@@ -455,7 +455,7 @@ mod tests {
                 name: String::from("eval-fixture"),
                 state_md: String::from("# eval-fixture - state\n\n## Context\nTest.\n"),
                 tasks_index_md: String::from(
-                    "# eval-fixture - tasks board\n\n## Open\n- 001 demo - demo task\n",
+                    "# eval-fixture - tasks board\n\n## Open\n- 001 demo\n",
                 ),
                 task_files,
             },

@@ -108,10 +108,10 @@ A task's preconditions ride on its board line as a `needs:` tail, the only depen
 
 ```text
 ## Open
-- 002 api - implement the endpoint needs: 001
-- 003 frontend - build the form needs: 001
-- 004 integration - end-to-end test needs: 002, 003
-- 005 docs - document the endpoint
+- 002 api needs: 001
+- 003 frontend needs: 001
+- 004 integration needs: 002, 003
+- 005 docs
 ```
 
 `needs: <id>` names a task in this session; `needs: <session>/<id>` names another session's board, for work that spans repos. Several refs are comma-separated, and all must hold.

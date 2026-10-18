@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn tasks_done_section_marks_only_tasks_with_a_view() {
-        let b = board("## Done\n- 001 a - gist\n- 002 b - gist\n");
+        let b = board("## Done\n- 001 a\n- 002 b\n");
         let one: HashSet<String> = ["001".to_string()].into_iter().collect();
         assert_eq!(
             tasks_done_section(&b, &one),
@@ -895,12 +895,10 @@ mod tests {
 
     #[test]
     fn tasks_done_section_lists_one_head_per_line_sorted_by_id() {
-        // A line is the task's head - no gist, no marker unless the task has a
-        // view - and the order is numeric: ids are not zero-padded, so text
-        // order would put `10` before `9`.
-        let b = board(
-            "## Done\n- 004 d - gist\n- 10 j - x\n- 9 i - x\n- 002 b needs: 001\n- 001 a - gist\n",
-        );
+        // A line is the task's head - no marker unless the task has a view -
+        // and the order is numeric: ids are not zero-padded, so text order
+        // would put `10` before `9`.
+        let b = board("## Done\n- 004 d\n- 10 j\n- 9 i\n- 002 b needs: 001\n- 001 a\n");
         assert_eq!(
             tasks_done_section(&b, &HashSet::new()),
             vec!["Done", "001 a", "002 b", "004 d", "9 i", "10 j"]
@@ -913,7 +911,7 @@ mod tests {
     fn tasks_done_section_caps_and_counts_the_rest() {
         let mut md = String::from("## Done\n");
         for i in 0..(DONE_LINES_MAX + 3) {
-            md.push_str(&format!("- {i:03} t - x\n"));
+            md.push_str(&format!("- {i:03} t\n"));
         }
         let lines = tasks_done_section(&board(&md), &HashSet::new());
         // The label, the capped heads, then the tail counting the rest.
@@ -926,8 +924,8 @@ mod tests {
     #[test]
     fn tasks_block_labels_sections_in_board_order() {
         let b = board(
-            "## Open\n- 002 a - x\n\n## Pending review\n- 003 b - x\n\n\
-             ## Pending fix\n- 004 c - x\n\n## Done\n- 001 d - x\n",
+            "## Open\n- 002 a\n\n## Pending review\n- 003 b\n\n\
+             ## Pending fix\n- 004 c\n\n## Done\n- 001 d\n",
         );
         let (lines, claimable) = tasks_block_lines(&b, "ws", &HashSet::new());
         assert_eq!(

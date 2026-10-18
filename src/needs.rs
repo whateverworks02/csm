@@ -465,7 +465,7 @@ mod tests {
     /// A task with no file carries nothing.
     #[test]
     fn view_marker_follows_the_task_through_the_forest() {
-        let md = "## Open\n- 001 a - x\n- 002 b - x needs: 001\n";
+        let md = "## Open\n- 001 a\n- 002 b needs: 001\n";
         assert_eq!(
             lines(&view_with(md, &["001"])),
             vec!["├── ○ 001 a ◆", "└── ○ 002 b", "    └── ○ 001 a ◆"]
@@ -480,7 +480,7 @@ mod tests {
     /// condition and `(unverified)` stay attached to the label.
     #[test]
     fn view_marker_follows_leaf_annotations() {
-        let md = "## Open\n- 002 api - x needs: 001 [pr merged]\n\n## Done\n- 001 contract - x\n";
+        let md = "## Open\n- 002 api needs: 001 [pr merged]\n\n## Done\n- 001 contract\n";
         assert_eq!(
             lines(&view_with(md, &["001"])),
             vec![
@@ -492,10 +492,10 @@ mod tests {
 
     /// Fork/join: 001 -> 002, 003 -> 004.
     const DIAMOND: &str = "# b\n\n## Open\n\
-        - 002 api - x needs: 001\n\
-        - 003 frontend - x needs: 001\n\
-        - 004 e2e - x needs: 002, 003\n\n\
-        ## Done\n- 001 contract - x\n";
+        - 002 api needs: 001\n\
+        - 003 frontend needs: 001\n\
+        - 004 e2e needs: 002, 003\n\n\
+        ## Done\n- 001 contract\n";
 
     // --- the forest ---
 
@@ -522,10 +522,10 @@ mod tests {
 
     #[test]
     fn chain_marks_each_status_and_pending_review_is_not_claimable() {
-        let md = "# b\n\n## Open\n- 004 e2e - x needs: 002\n\n\
-                  ## Pending review\n- 002 api - x needs: 001\n\n\
-                  ## Pending fix\n- 003 fix - x needs: 001\n\n\
-                  ## Done\n- 001 contract - x\n";
+        let md = "# b\n\n## Open\n- 004 e2e needs: 002\n\n\
+                  ## Pending review\n- 002 api needs: 001\n\n\
+                  ## Pending fix\n- 003 fix needs: 001\n\n\
+                  ## Done\n- 001 contract\n";
         let v = view(md);
         // One group per board section, in board order: Open, then Pending
         // review (◐), then Pending fix (◑). Each group is its own tree, so
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn gistless_entry_label_drops_the_tail() {
+    fn entry_label_drops_the_needs_tail() {
         let v = view("# b\n\n## Open\n- 002 api check needs: 001\n\n## Done\n- 001 contract\n");
         assert_eq!(
             lines(&v),
@@ -578,15 +578,15 @@ mod tests {
 
     #[test]
     fn cjk_labels_render_inline() {
-        let v = view("# b\n\n## Open\n- 002 前端 - x needs: 001\n\n## Done\n- 001 契约 - x\n");
+        let v = view("# b\n\n## Open\n- 002 前端 needs: 001\n\n## Done\n- 001 契约\n");
         assert_eq!(lines(&v), vec!["└── ○ 002 前端", "    └── ✓ 001 契约"]);
     }
 
     #[test]
     fn long_labels_preserve_all_dependencies_and_conditions() {
         let md = format!(
-            "## Open\n- 003 {} - x needs: 001, 002 [interface PR merged]\n\
-             - 002 blocker - x\n## Done\n- 001 {} - x\n",
+            "## Open\n- 003 {} needs: 001, 002 [interface PR merged]\n\
+             - 002 blocker\n## Done\n- 001 {}\n",
             "integration".repeat(15),
             "contract".repeat(20)
         );
@@ -600,8 +600,8 @@ mod tests {
 
     #[test]
     fn conditioned_ref_is_never_satisfied() {
-        let md = "# b\n\n## Open\n- 002 api - x needs: 001 [interface PR merged]\n\n\
-                  ## Done\n- 001 contract - x\n";
+        let md = "# b\n\n## Open\n- 002 api needs: 001 [interface PR merged]\n\n\
+                  ## Done\n- 001 contract\n";
         let v = view(md);
         assert_eq!(v.claimable_line, "");
         // The leaf looks Done but says so itself: the condition is unverified.
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn known_done_boundary_satisfies() {
-        let board = parse_tasks_board("# b\n\n## Open\n- 002 api - x needs: api-contract/012\n");
+        let board = parse_tasks_board("# b\n\n## Open\n- 002 api needs: api-contract/012\n");
         let mut boundary =
             |s: &str, t: &str| (s == "api-contract" && t == "012").then_some(Status::Done);
         let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
@@ -630,8 +630,7 @@ mod tests {
     #[test]
     fn dotted_and_unicode_session_names_resolve_boundaries() {
         for session in ["api.v2", "接口.v2"] {
-            let board =
-                parse_tasks_board(&format!("## Open\n- 002 api - x needs: {session}/001\n"));
+            let board = parse_tasks_board(&format!("## Open\n- 002 api needs: {session}/001\n"));
             let mut boundary =
                 |s: &str, t: &str| (s == session && t == "001").then_some(Status::Done);
             let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
@@ -648,7 +647,7 @@ mod tests {
 
     #[test]
     fn own_session_prefix_resolves_locally() {
-        let md = "# b\n\n## Open\n- 002 api - x needs: csm/001\n\n## Done\n- 001 contract - x\n";
+        let md = "# b\n\n## Open\n- 002 api needs: csm/001\n\n## Done\n- 001 contract\n";
         let v = view(md);
         assert_eq!(v.claimable_line, "002");
         assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ✓ 001 contract"]);
@@ -658,7 +657,7 @@ mod tests {
 
     #[test]
     fn unknown_boundary_is_flagged_not_satisfied() {
-        let v = view("# b\n\n## Open\n- 002 api - x needs: api-contract/012\n");
+        let v = view("# b\n\n## Open\n- 002 api needs: api-contract/012\n");
         assert_eq!(v.claimable_line, "");
         assert_eq!(
             lines(&v),
@@ -668,7 +667,7 @@ mod tests {
 
     #[test]
     fn missing_local_ref_is_flagged_inline() {
-        let v = view("# b\n\n## Open\n- 002 api - x needs: 099\n");
+        let v = view("# b\n\n## Open\n- 002 api needs: 099\n");
         assert_eq!(v.claimable_line, "");
         assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ? 099 (missing)"]);
     }
@@ -678,7 +677,7 @@ mod tests {
         // The condition matters most exactly where the ref cannot resolve -
         // it is what must be verified once the target appears.
         let v = view(
-            "# b\n\n## Open\n- 002 api - x needs: 099 [interface PR merged], \
+            "# b\n\n## Open\n- 002 api needs: 099 [interface PR merged], \
              api-contract/012 [deployed]\n",
         );
         assert_eq!(
@@ -694,7 +693,7 @@ mod tests {
 
     #[test]
     fn a_flagged_ref_does_not_hide_the_resolvable_ones() {
-        let md = "# b\n\n## Open\n- 003 solo - x needs: 001, 099\n\n## Done\n- 001 contract - x\n";
+        let md = "# b\n\n## Open\n- 003 solo needs: 001, 099\n\n## Done\n- 001 contract\n";
         let v = view(md);
         assert_eq!(
             lines(&v),
@@ -709,7 +708,7 @@ mod tests {
 
     #[test]
     fn self_need_is_named_itself_and_never_satisfied() {
-        let v = view("# b\n\n## Open\n- 002 api - x needs: 002\n");
+        let v = view("# b\n\n## Open\n- 002 api needs: 002\n");
         assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ! itself"]);
         assert_eq!(v.claimable_line, "");
         // A self-loop is already named by the leaf; no cycle warning on top.
@@ -718,7 +717,7 @@ mod tests {
 
     #[test]
     fn cycle_keeps_every_edge_and_names_the_loop_once() {
-        let v = view("# b\n\n## Open\n- 002 api - x needs: 003\n- 003 frontend - x needs: 002\n");
+        let v = view("# b\n\n## Open\n- 002 api needs: 003\n- 003 frontend needs: 002\n");
         // Expand-once: each side is a single leaf under the other, so the
         // loop renders without recursing; the warning names it once, at the
         // block's level rather than under a section.
@@ -740,7 +739,7 @@ mod tests {
 
     #[test]
     fn unparseable_tail_is_surfaced_inline() {
-        let v = view("# b\n\n## Open\n- 002 api - x needs: ???\n");
+        let v = view("# b\n\n## Open\n- 002 api needs: ???\n");
         assert_eq!(
             lines(&v),
             vec!["└── ○ 002 api", "    └── ! unparseable tail (needs: ???)"]
@@ -754,7 +753,7 @@ mod tests {
     fn dependency_free_board_renders_roots_without_claimable() {
         // No tails to gate anything: the forest is the plain root list, and
         // a claimable row would only restate it.
-        let v = view("# b\n\n## Open\n- 001 a - x\n- 002 b - x\n");
+        let v = view("# b\n\n## Open\n- 001 a\n- 002 b\n");
         assert_eq!(lines(&v), vec!["├── ○ 001 a", "└── ○ 002 b"]);
         assert_eq!(v.claimable_line, "");
     }
@@ -762,7 +761,7 @@ mod tests {
     #[test]
     fn fully_done_board_has_no_view() {
         // A tail on a Done task is history, not a live plan.
-        assert!(view_or_none("# b\n\n## Done\n- 001 a - x needs: 000\n- 000 z - x\n").is_none());
+        assert!(view_or_none("# b\n\n## Done\n- 001 a needs: 000\n- 000 z\n").is_none());
     }
 
     #[test]
