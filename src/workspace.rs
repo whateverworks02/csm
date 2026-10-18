@@ -539,7 +539,7 @@ fn state_md_template(name: &str) -> String {
         r#"# {name} - state
 
 ## Context
-<!-- What this session is + why + current focus. -->
+<!-- One short paragraph: what this session is + current focus. Rewrite in place when focus shifts; no history, no log. -->
 
 ## Key links
 <!-- Repo / docs / related sessions / transcript. -->
