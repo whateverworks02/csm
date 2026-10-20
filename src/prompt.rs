@@ -40,10 +40,10 @@ Plan, execute, review, and opening a PR are separate phases. At the endpoint in 
 | Ask for an explanation | Answer from the relevant task and verify the facts needed for the answer. Propose a change if warranted | Answer delivered; requirements and status unchanged |
 | Execute agreed work | Implement and verify within scope; record outcomes and any blocker | Task records updated; line at Pending review, whether completed or stuck |
 | Review submitted work | Check against AC; write Review and answer Open questions; approve to Done or return to Pending fix. Report required fixes for the execution phase | Verdict recorded; reviewed board lines moved |
-| Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. Reopen submitted or Done work to Pending fix; implement and verify the requested change. A request limited to changing the plan ends after recording it | Revised plan recorded if that was the limit; otherwise the execution endpoint |
+| Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. A request limited to changing the plan reopens submitted or Done work to Pending fix and ends; otherwise implement and verify the requested change | Revised plan recorded if that was the limit; otherwise the execution endpoint (Done when completed on an already-open PR) |
 | Authorize opening a PR after local review | Create the PR from the reviewed work and record its link in Progress | Link recorded |
 
-Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update, or the change rides an already-open PR whose review covers it - place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
+Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update - or the change rides an already-open PR, place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
 
 Questions, reviews, and modifications belong to the task they concern. A new task requires the user's confirmation of a separate, independently reviewable deliverable. That confirmation is permission, never an obligation: writing notes, organizing knowledge, and updating records within existing scope happen directly in those records, without a board line. Classify PR feedback by what it requests using the same table; its source does not itself authorize a change. The same agent may serve different phases on the same task.
 
@@ -168,9 +168,14 @@ mod tests {
         assert!(!block.contains("clarification, added requirement"));
         // Execution ends at Pending review, completed or stuck.
         assert!(block.contains("line at Pending review, whether completed or stuck"));
-        // Review lands in the original task; changes reopen it there.
+        // Review lands in the original task; a plan-only change reopens it
+        // there, an implemented change reaches the execution endpoint - and a
+        // change on an already-open PR ends at Done.
         assert!(block.contains("approve to Done or return to Pending fix"));
-        assert!(block.contains("Reopen submitted or Done work to Pending fix"));
+        assert!(block.contains(
+            "A request limited to changing the plan reopens submitted or Done work to Pending fix and ends"
+        ));
+        assert!(block.contains("(Done when completed on an already-open PR)"));
         assert!(block.contains("Revised plan recorded if that was the limit"));
         assert!(block.contains("record its link in Progress"));
         // Routing: existing tasks, the new-task bar, PR feedback by content.
@@ -192,7 +197,9 @@ mod tests {
         // table: what the stop is for, the PR as review surface, artifact-free
         // output, and the user's word as the status decision.
         assert!(block.contains("Pending review is the stop for an unchecked diff or artifact."));
-        assert!(block.contains("or the change rides an already-open PR whose review covers it"));
+        assert!(block.contains(
+            "or the change rides an already-open PR, place the line where the work stands instead"
+        ));
         assert!(block.contains("place the line where the work stands instead"));
         assert!(block.contains("A user instruction that says where a line goes is the decision"));
         assert!(block.contains("from the sole reviewer it is also the verdict"));
