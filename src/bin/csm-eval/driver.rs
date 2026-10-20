@@ -29,8 +29,21 @@ pub struct TurnArgs<'a> {
     pub session_id: &'a str,
     /// Optional explicit model id (the cell's model).
     pub model: Option<&'a str>,
+    /// The `explicit` arm's correct-behavior instruction, appended to the
+    /// scripted turn so the treatment rides on the user message rather than on
+    /// the deployed block.
+    pub explicit: Option<&'a str>,
     /// Seatbelt profile to route the command through, when active.
     pub seatbelt: &'a Option<PathBuf>,
+}
+
+/// The prompt the harness actually receives: the scripted turn, plus the
+/// `explicit` arm's instruction when that arm is active.
+fn composed_prompt(args: &TurnArgs) -> String {
+    match args.explicit {
+        Some(instruction) => format!("{}\n\n{instruction}", args.prompt),
+        None => args.prompt.to_string(),
+    }
 }
 
 pub struct TurnResult {
@@ -95,7 +108,7 @@ impl EvalAgent for ClaudeDriver {
 
     fn turn_command(&self, args: &TurnArgs) -> Result<Command> {
         let mut cmd = Command::new("claude");
-        cmd.arg("-p").arg(args.prompt);
+        cmd.arg("-p").arg(composed_prompt(args));
         cmd.args(Self::STREAM_FLAGS);
         cmd.args(["--append-system-prompt", AUTO_MODE_PROMPT]);
         if let Some(model) = args.model {
@@ -201,10 +214,11 @@ impl EvalAgent for CodexDriver {
 
     fn turn_command(&self, args: &TurnArgs) -> Result<Command> {
         let mut cmd = self.base_command(args);
+        let prompt = composed_prompt(args);
         if args.first {
-            cmd.arg(args.prompt);
+            cmd.arg(prompt);
         } else {
-            cmd.arg("resume").arg(args.session_id).arg(args.prompt);
+            cmd.arg("resume").arg(args.session_id).arg(prompt);
         }
         sandbox::apply_env(&mut cmd, args.sb, args.session_name);
         sandbox::wrap_seatbelt(&mut cmd, args.seatbelt);
@@ -417,6 +431,7 @@ mod tests {
             first,
             session_id,
             model: Some("test-model"),
+            explicit: None,
             seatbelt,
         }
     }
@@ -542,5 +557,46 @@ mod tests {
     fn harness_dispatch() {
         assert_eq!(driver_for(Harness::Claude).id(), "claude");
         assert_eq!(driver_for(Harness::Codex).id(), "codex");
+    }
+
+    #[test]
+    fn the_explicit_arm_appends_its_instruction_to_the_turn() {
+        let sb = sandbox();
+        let seatbelt = None;
+        let mut a = args(&sb, true, "sid-1", &seatbelt);
+        a.explicit = Some("stop at Pending review");
+        let cmd = ClaudeDriver.turn_command(&a).unwrap();
+        let flat: Vec<String> = cmd
+            .get_args()
+            .map(|x| x.to_string_lossy().to_string())
+            .collect();
+        let p = flat.iter().position(|x| x == "-p").unwrap();
+        assert_eq!(
+            flat[p + 1],
+            "execute the next task\n\nstop at Pending review"
+        );
+
+        // Codex takes the prompt positionally, on both the fresh and the
+        // resumed path.
+        let first = CodexDriver.turn_command(&a).unwrap();
+        let flat: Vec<String> = first
+            .get_args()
+            .map(|x| x.to_string_lossy().to_string())
+            .collect();
+        assert!(flat
+            .iter()
+            .any(|x| x == "execute the next task\n\nstop at Pending review"));
+
+        // Without the arm the turn is verbatim.
+        let cmd = ClaudeDriver
+            .turn_command(&args(&sb, true, "sid-1", &seatbelt))
+            .unwrap();
+        let flat: Vec<String> = cmd
+            .get_args()
+            .map(|x| x.to_string_lossy().to_string())
+            .collect();
+        let p = flat.iter().position(|x| x == "-p").unwrap();
+        assert_eq!(flat[p + 1], "execute the next task");
+        let _ = sb.remove();
     }
 }

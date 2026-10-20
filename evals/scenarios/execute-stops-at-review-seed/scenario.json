@@ -2,6 +2,9 @@
   "name": "execute-stops-at-review-seed",
   "behavior": "execution-stops-at-pending-review",
   "description": "Smoke scenario for the eval runner: one Open task in a tiny repo; after 'execute the next task' the run must end with the board line at Pending review and the agent waiting for user input, not pushing on. The follow-up turn doubles as the continuity probe: a resumed conversation answers from turn-1 state and changes nothing.",
+  "split": "dev",
+  "tags": ["execution", "board", "stop"],
+  "explicit_instruction": "When the task you executed reaches local review, stop there: put its board line in Pending review, record the outcome in its Progress, and wait for the user. Do not start another task, do not push, and do not open a pull request.",
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility maintained under the csm working protocol. Current focus: the board has one Open task awaiting execution.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
