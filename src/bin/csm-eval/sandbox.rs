@@ -158,8 +158,10 @@ pub fn apply_env(cmd: &mut Command, sb: &Sandbox, session_name: &str) {
 
 /// Run `csm init` under the sandbox env so the real deploy code path (inject /
 /// hook wiring / skills) writes the working-tree block into the sandbox
-/// config. The `no-block` arm skips wiring entirely.
-pub fn deploy_wiring(sb: &Sandbox, arm: Arm, session_name: &str) -> Result<()> {
+/// config, then apply what the arm changes about the block itself: nothing
+/// (working / explicit), the vendored historical block swapped in over the
+/// deployed one (v0.6), or no wiring at all (no-block).
+pub fn deploy_wiring(sb: &Sandbox, arm: Arm, session_name: &str, repo_root: &Path) -> Result<()> {
     if arm == Arm::NoBlock {
         return Ok(());
     }
@@ -177,19 +179,51 @@ pub fn deploy_wiring(sb: &Sandbox, arm: Arm, session_name: &str) -> Result<()> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    if arm.vendored_block() {
+        swap_block(
+            sb,
+            &crate::arms::vendored_block(repo_root, arm, &sb.csm_home.display().to_string())?
+                .context("the arm pins a block but none was vendored")?,
+        )?;
+    }
     Ok(())
 }
 
-/// Post-deploy self-check (working-tree arm): the sandbox harness config must
-/// carry the working-tree [csm] block, the SessionStart hook, and the shipped
-/// skills. Returns the block's sha256 over the marker-bounded region.
-pub fn deploy_check(sb: &Sandbox, arm: Arm) -> Result<Option<String>> {
-    if arm == Arm::NoBlock {
-        return Ok(None);
-    }
-    let md_path = sb.home.join(".claude").join("CLAUDE.md");
-    let md = std::fs::read_to_string(&md_path)
-        .with_context(|| format!("reading {}", md_path.display()))?;
+/// The home path a block is rendered against when it is being *identified*
+/// rather than deployed. The deployed block embeds the sandbox's own
+/// `$CSM_HOME`, so hashing it would give every sandbox - and so every rep - a
+/// different "prompt ref".
+const BLOCK_REF_HOME: &str = "{CSM_HOME}";
+
+/// The arm's block identity, independent of the sandbox it was deployed into:
+/// the sha256 of the block this arm means, whatever the home. `None` for the
+/// arm that deploys no block at all.
+pub fn block_ref(repo_root: &Path, arm: Arm) -> Result<Option<String>> {
+    let block = match crate::arms::vendored_block(repo_root, arm, BLOCK_REF_HOME)? {
+        Some(vendored) => vendored,
+        None if arm == Arm::NoBlock => return Ok(None),
+        None => csm_block(BLOCK_REF_HOME),
+    };
+    Ok(Some(sha256_hex(block.as_bytes())?))
+}
+
+/// Replace the marker-bounded region of the sandbox's `CLAUDE.md` with
+/// `block`. The hook and skill wiring `csm init` wrote stay put: the contrast
+/// arm varies the prompt, nothing else.
+fn swap_block(sb: &Sandbox, block: &str) -> Result<()> {
+    let path = sb.home.join(".claude").join("CLAUDE.md");
+    let md =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let (begin, end) = block_region(&md)?;
+    let mut swapped = String::with_capacity(md.len());
+    swapped.push_str(&md[..begin]);
+    swapped.push_str(block);
+    swapped.push_str(&md[end..]);
+    std::fs::write(&path, swapped).with_context(|| format!("writing {}", path.display()))
+}
+
+/// The byte range of the marker-bounded region in `md`.
+fn block_region(md: &str) -> Result<(usize, usize)> {
     let begin = md
         .find(CSM_MARK_BEGIN)
         .context("sandbox CLAUDE.md is missing the [csm] block begin marker")?;
@@ -197,12 +231,35 @@ pub fn deploy_check(sb: &Sandbox, arm: Arm) -> Result<Option<String>> {
         .find(CSM_MARK_END)
         .context("sandbox CLAUDE.md is missing the [csm] block end marker")?;
     anyhow::ensure!(end >= begin, "[csm] block markers out of order");
-    let block = &md[begin..end + CSM_MARK_END.len()];
+    Ok((begin, end + CSM_MARK_END.len()))
+}
 
-    // The deployed block must be the working-tree block (same home rendering).
+/// Post-deploy self-check: the sandbox harness config must carry the block
+/// this arm claims to deploy, the SessionStart hook, and the shipped skills.
+/// Returns the block's sha256 over the marker-bounded region.
+pub fn deploy_check(sb: &Sandbox, arm: Arm, repo_root: &Path) -> Result<Option<String>> {
+    if arm == Arm::NoBlock {
+        return Ok(None);
+    }
+    let md_path = sb.home.join(".claude").join("CLAUDE.md");
+    let md = std::fs::read_to_string(&md_path)
+        .with_context(|| format!("reading {}", md_path.display()))?;
+    let (begin, end) = block_region(&md)?;
+    let block = &md[begin..end];
+
+    // The deployed block must be the one this arm claims, rendered for this
+    // sandbox's home - a stale or half-swapped block would silently make the
+    // arm mean something else. An unreadable vendored block is an error, not a
+    // fallback: falling back would check the working-tree block against itself.
+    let home = sb.csm_home.display().to_string();
+    let want = match crate::arms::vendored_block(repo_root, arm, &home)? {
+        Some(vendored) => vendored,
+        None => csm_block(&home),
+    };
     anyhow::ensure!(
-        block == csm_block(&sb.csm_home.display().to_string()),
-        "deployed [csm] block differs from the working-tree block"
+        block == want,
+        "the deployed [csm] block is not the {} arm's block",
+        arm.id()
     );
 
     let settings_path = sb.home.join(".claude").join("settings.json");
@@ -383,6 +440,10 @@ pub fn wrap_seatbelt(cmd: &mut Command, profile: &Option<PathBuf>) {
         .filter_map(|(k, v)| v.map(|v| (k.to_os_string(), v.to_os_string())))
         .collect();
     let mut wrapped = Command::new("sandbox-exec");
+    // The replacement command inherits this process's environment unless it is
+    // cleared first, which would hand the agent the operator's whole env - the
+    // `GH_*` variables the curated env exists to withhold among them.
+    wrapped.env_clear();
     wrapped.arg("-f").arg(profile).arg(&program);
     for a in args {
         wrapped.arg(a);
@@ -439,6 +500,11 @@ mod tests {
             .and_then(|(_, v)| v.map(|v| v.to_string_lossy().to_string()))
     }
 
+    /// The crate root, where `evals/arms/` and the product's own sources live.
+    fn repo_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
     fn minimal_scenario(name: &str) -> Scenario {
         let mut files = BTreeMap::new();
         files.insert(String::from("README.md"), String::from("# demo\n"));
@@ -451,6 +517,9 @@ mod tests {
             name: name.to_string(),
             behavior: String::from("behavior"),
             description: String::from("test fixture"),
+            split: crate::scenario::Split::Dev,
+            tags: Vec::new(),
+            explicit_instruction: String::from("do the right thing"),
             session: FixtureSession {
                 name: String::from("eval-fixture"),
                 state_md: String::from("# eval-fixture - state\n\n## Context\nTest.\n"),
@@ -512,6 +581,30 @@ mod tests {
         let _ = sb.remove();
     }
 
+    /// The block a run reports has to identify the prompt, not the sandbox:
+    /// the same arm deployed into two sandboxes is the same block.
+    #[test]
+    fn the_block_ref_is_stable_across_sandboxes() {
+        let a = Sandbox::create().unwrap();
+        let b = Sandbox::create().unwrap();
+        for arm in [Arm::Working, Arm::Explicit, Arm::V06] {
+            let first = block_ref(&repo_root(), arm).unwrap().unwrap();
+            let second = block_ref(&repo_root(), arm).unwrap().unwrap();
+            assert_eq!(first, second, "{} ref is not stable", arm.id());
+            assert_eq!(first.len(), 64);
+        }
+        // The three deployed arms are three different prompts.
+        let refs: Vec<String> = [Arm::Working, Arm::Explicit, Arm::V06]
+            .iter()
+            .map(|a| block_ref(&repo_root(), *a).unwrap().unwrap())
+            .collect();
+        assert_eq!(refs[0], refs[1], "explicit deploys the working-tree block");
+        assert_ne!(refs[0], refs[2], "v0.6 is a different prompt");
+        assert_eq!(block_ref(&repo_root(), Arm::NoBlock).unwrap(), None);
+        let _ = a.remove();
+        let _ = b.remove();
+    }
+
     #[test]
     fn sha256_hex_matches_known_vector() {
         // sha256("abc")
@@ -542,9 +635,11 @@ mod tests {
         // store/workspace, and the fixture repo with its bare remote.
         let scenario = minimal_scenario("sandbox-it");
         let sb = Sandbox::create().unwrap();
-        deploy_wiring(&sb, Arm::WorkingTree, &scenario.session.name).unwrap();
+        deploy_wiring(&sb, Arm::Working, &scenario.session.name, &repo_root()).unwrap();
 
-        let block_sha = deploy_check(&sb, Arm::WorkingTree).unwrap().unwrap();
+        let block_sha = deploy_check(&sb, Arm::Working, &repo_root())
+            .unwrap()
+            .unwrap();
         assert_eq!(block_sha.len(), 64);
         let md = std::fs::read_to_string(sb.home.join(".claude").join("CLAUDE.md")).unwrap();
         assert!(md.contains(CSM_MARK_BEGIN) && md.contains(CSM_MARK_END));
@@ -583,14 +678,94 @@ mod tests {
         // The no-block arm deploys nothing and the check reports no block,
         // on a fresh sandbox (the arm means init never ran).
         let sb2 = Sandbox::create().unwrap();
-        deploy_wiring(&sb2, Arm::NoBlock, "eval-fixture").unwrap();
-        assert_eq!(deploy_check(&sb2, Arm::NoBlock).unwrap(), None);
+        deploy_wiring(&sb2, Arm::NoBlock, "eval-fixture", &repo_root()).unwrap();
+        assert_eq!(
+            deploy_check(&sb2, Arm::NoBlock, &repo_root()).unwrap(),
+            None
+        );
         assert!(
             !sb2.home.join(".claude").join("CLAUDE.md").exists(),
             "no-block arm must not write any config"
         );
         sb2.remove().unwrap();
 
+        sb.remove().unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn v06_arm_swaps_in_the_vendored_block_over_the_working_tree_wiring() {
+        let scenario = minimal_scenario("sandbox-v06");
+        let sb = Sandbox::create().unwrap();
+        deploy_wiring(&sb, Arm::V06, &scenario.session.name, &repo_root()).unwrap();
+        let sha = deploy_check(&sb, Arm::V06, &repo_root()).unwrap().unwrap();
+        assert_eq!(sha.len(), 64);
+
+        let md = std::fs::read_to_string(sb.home.join(".claude").join("CLAUDE.md")).unwrap();
+        let (begin, end) = block_region(&md).unwrap();
+        let block = &md[begin..end];
+        // The deployed block is the historical one, not the working tree's.
+        assert_ne!(block, csm_block(&sb.csm_home.display().to_string()));
+        assert_eq!(
+            block,
+            crate::arms::vendored_block(&repo_root(), Arm::V06, &sb.csm_home.display().to_string())
+                .unwrap()
+                .unwrap()
+        );
+        // The rest of the wiring is untouched: hook + skills still deployed.
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(sb.home.join(".claude").join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(inject::sessionstart_hook_present(&settings));
+        for skill in skills::SKILLS {
+            assert!(sb
+                .home
+                .join(".claude")
+                .join("skills")
+                .join(skill.id)
+                .join("SKILL.md")
+                .exists());
+        }
+        // The swap replaces the marked region only: the file still carries
+        // exactly one block.
+        assert_eq!(md.matches(CSM_MARK_BEGIN).count(), 1);
+        assert_eq!(md.matches(CSM_MARK_END).count(), 1);
+        sb.remove().unwrap();
+    }
+
+    /// The wrap rebuilds the command, so it has to re-clear the environment:
+    /// inheriting this process's env would hand the agent the operator's
+    /// whole environment, `GH_*` and all.
+    #[test]
+    fn seatbelt_wrap_keeps_the_curated_env_and_nothing_else() {
+        let sb = Sandbox::create().unwrap();
+        let profile = match write_seatbelt_profile(&sb).unwrap() {
+            Some(p) => p,
+            None => return, // no sandbox-exec on this platform
+        };
+        std::env::set_var("CSM_EVAL_LEAK_PROBE", "leak-me-not");
+        let mut cmd = Command::new("/usr/bin/env");
+        apply_env(&mut cmd, &sb, "eval-fixture");
+        wrap_seatbelt(&mut cmd, &Some(profile));
+        cmd.current_dir(&sb.repo);
+        let out = cmd.output().unwrap();
+        std::env::remove_var("CSM_EVAL_LEAK_PROBE");
+
+        assert!(out.status.success(), "{:?}", out.status);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !text.contains("leak-me-not"),
+            "the operator env leaked:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("HOME={}", sb.home.display())),
+            "the curated env did not survive the wrap:\n{text}"
+        );
+        assert!(
+            text.contains("CSM_SESSION=eval-fixture"),
+            "the curated env did not survive the wrap:\n{text}"
+        );
         sb.remove().unwrap();
     }
 
