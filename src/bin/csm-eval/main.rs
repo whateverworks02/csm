@@ -509,6 +509,7 @@ fn run_one_rep(ctx: &RepCtx) -> Result<RepOutcome> {
 
     sandbox::scaffold_fixture_session(&sb, scenario)?;
     sandbox::scaffold_fixture_repo(&sb, scenario)?;
+    sandbox::scaffold_siblings(&sb, scenario)?;
 
     // Checkpoint 0: the seeded fixture, before any turn.
     let session_dir = sb.csm_home.join("sessions").join(&scenario.session.name);

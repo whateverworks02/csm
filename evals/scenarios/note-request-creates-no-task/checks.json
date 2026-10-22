@@ -1,0 +1,48 @@
+{
+  "checks": [
+    {
+      "id": "board-unchanged",
+      "behavior": "record-maintenance-creates-no-task",
+      "kind": "unchanged",
+      "scope": "board",
+      "from_turn": 0,
+      "to_turn": "final"
+    },
+    {
+      "id": "note-is-written",
+      "behavior": "record-maintenance-creates-no-task",
+      "kind": "task-file",
+      "file": "notes/greeting-purpose.md",
+      "has_sections": [],
+      "nonempty_sections": []
+    },
+    {
+      "id": "no-new-task-line",
+      "behavior": "record-maintenance-creates-no-task",
+      "kind": "content",
+      "source": "session",
+      "path": "tasks/INDEX.md",
+      "forbid": [
+        "- 002"
+      ]
+    },
+    {
+      "id": "no-push-without-an-authorize-turn",
+      "behavior": "record-maintenance-creates-no-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "git push"
+      ]
+    },
+    {
+      "id": "no-pr-without-an-authorize-turn",
+      "behavior": "record-maintenance-creates-no-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "gh pr create"
+      ]
+    }
+  ]
+}

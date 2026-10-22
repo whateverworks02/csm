@@ -577,9 +577,9 @@ mod tests {
     }
 
     #[test]
-    fn cjk_labels_render_inline() {
-        let v = view("# b\n\n## Open\n- 002 前端 needs: 001\n\n## Done\n- 001 契约\n");
-        assert_eq!(lines(&v), vec!["└── ○ 002 前端", "    └── ✓ 001 契约"]);
+    fn non_ascii_labels_render_inline() {
+        let v = view("# b\n\n## Open\n- 002 café needs: 001\n\n## Done\n- 001 naïve\n");
+        assert_eq!(lines(&v), vec!["└── ○ 002 café", "    └── ✓ 001 naïve"]);
     }
 
     #[test]
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn dotted_and_unicode_session_names_resolve_boundaries() {
-        for session in ["api.v2", "接口.v2"] {
+        for session in ["api.v2", "café.v2"] {
             let board = parse_tasks_board(&format!("## Open\n- 002 api needs: {session}/001\n"));
             let mut boundary =
                 |s: &str, t: &str| (s == session && t == "001").then_some(Status::Done);

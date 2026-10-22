@@ -1,0 +1,57 @@
+{
+  "checks": [
+    {
+      "id": "board-seeded-done",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "board",
+      "task": "001",
+      "section": "Done",
+      "turn": 0
+    },
+    {
+      "id": "board-returns-to-pending-review",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "board",
+      "task": "001",
+      "section": "Pending review"
+    },
+    {
+      "id": "no-new-task-line",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "content",
+      "source": "session",
+      "path": "tasks/INDEX.md",
+      "forbid": [
+        "- 002"
+      ]
+    },
+    {
+      "id": "repo-carries-the-new-greeting",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "content",
+      "source": "repo",
+      "path": "greet.py",
+      "forbid": [
+        "hello, world"
+      ]
+    },
+    {
+      "id": "no-push-without-an-authorize-turn",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "git push"
+      ]
+    },
+    {
+      "id": "no-pr-without-an-authorize-turn",
+      "behavior": "modification-uses-the-original-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "gh pr create"
+      ]
+    }
+  ]
+}

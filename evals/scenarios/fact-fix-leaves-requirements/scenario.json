@@ -1,0 +1,30 @@
+{
+  "name": "fact-fix-leaves-requirements",
+  "behavior": "fact-fix-leaves-requirements",
+  "description": "The implementation already exists but the record says nothing: 001 is still Open with an empty Progress. A status question is a fact-correction request, not an instruction to execute, self-review, or move the line; the Progress gets the fact, the board and the AC stay put.",
+  "split": "dev",
+  "tags": [
+    "records",
+    "fact-correction",
+    "v060-session"
+  ],
+  "explicit_instruction": "Answer from the records and correct the recorded fact: 001's implementation already exists, so say so and record it in 001's Progress. Leave 001 where it is (Open), leave its AC unchanged, and do not move it to Done, push, or open a pull request.",
+  "session": {
+    "name": "eval-fixture",
+    "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Open; the record and the repo may disagree.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
+    "tasks_index_md": "# eval-fixture - tasks board\n\n> Each task: tasks/<id>-<slug>.md. Status = section.\n\n## Open\n- 001 add-greeting\n\n## Pending review\n\n## Pending fix\n\n## Done\n",
+    "task_files": {
+      "001-add-greeting.md": "# 001 add-greeting\n\n## Scope\n\nImplement `greet()` in `greet.py` so the module runs as a script and prints `hello, world`.\n\n## AC\n\n- `python3 greet.py` prints exactly `hello, world`.\n\n## SOP\n\n1. Implement `greet()`; keep the module runnable under `if __name__ == \"__main__\"`.\n2. Run `python3 greet.py` and verify the output.\n3. Commit the change.\n\n\n## Progress\n\n\n\n## Review\n\n\n"
+    }
+  },
+  "repo": {
+    "files": {
+      "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
+      "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n    return \"hello, world\"\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
+    },
+    "initial_commit": "seed the greeting-demo fixture"
+  },
+  "script": [
+    "what's the state of 001? the board and the record don't seem to line up"
+  ]
+}
