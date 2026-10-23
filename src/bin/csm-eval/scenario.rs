@@ -172,6 +172,17 @@ pub struct FixtureRepo {
     pub initial_commit: String,
 }
 
+/// A second checkout beside the agent's cwd, sharing the fixture session.
+/// Cross-repo scenarios use this: one session, two repos. The cwd stays the
+/// scenario's `repo`; a sibling is a directory next to it, not inside it.
+#[derive(Deserialize, Debug)]
+pub struct SiblingRepo {
+    /// Repo files, keyed by relative path.
+    pub files: BTreeMap<String, String>,
+    /// The initial commit message.
+    pub initial_commit: String,
+}
+
 /// A loaded scenario.
 #[derive(Deserialize, Debug)]
 pub struct Scenario {
@@ -193,6 +204,10 @@ pub struct Scenario {
     pub explicit_instruction: String,
     pub session: FixtureSession,
     pub repo: FixtureRepo,
+    /// Other checkouts sharing this session, keyed by directory name. Each is
+    /// created next to the cwd repo. Empty for a single-repo scenario.
+    #[serde(default)]
+    pub siblings: BTreeMap<String, SiblingRepo>,
     /// Fixed user turns, executed verbatim in order.
     pub script: Vec<String>,
 }
@@ -229,6 +244,39 @@ impl Scenario {
         if scenario.tags.iter().any(|t| t.trim().is_empty()) {
             anyhow::bail!("scenario {:?} carries an empty tag", scenario.name);
         }
+        for (name, sibling) in &scenario.siblings {
+            if !is_sibling_name(name) {
+                anyhow::bail!(
+                    "scenario {:?}: sibling name {:?} is not a single lowercase path segment",
+                    scenario.name,
+                    name
+                );
+            }
+            if sibling.initial_commit.trim().is_empty() {
+                anyhow::bail!(
+                    "scenario {:?}: sibling {:?} has an empty initial commit",
+                    scenario.name,
+                    name
+                );
+            }
+            if sibling.files.is_empty() {
+                anyhow::bail!(
+                    "scenario {:?}: sibling {:?} has no files",
+                    scenario.name,
+                    name
+                );
+            }
+            for rel in sibling.files.keys() {
+                if rel.starts_with('/') || rel.split('/').any(|seg| seg.is_empty() || seg == "..") {
+                    anyhow::bail!(
+                        "scenario {:?}: sibling {:?} file {:?} escapes the checkout",
+                        scenario.name,
+                        name,
+                        rel
+                    );
+                }
+            }
+        }
         Ok(scenario)
     }
 
@@ -253,6 +301,17 @@ pub fn discover(dir: &Path) -> Result<Vec<(String, Scenario)>> {
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
+}
+
+/// A sibling checkout name: one lowercase path segment, never the cwd repo's
+/// own directory name (`repo`).
+fn is_sibling_name(s: &str) -> bool {
+    !s.is_empty()
+        && s != "repo"
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 #[cfg(test)]
@@ -334,6 +393,17 @@ mod tests {
     }
 
     #[test]
+    fn scenario_rejects_a_sibling_that_escapes_the_sandbox() {
+        let json = VALID.replace(
+            r#""script": ["go", "how did it go?"]"#,
+            r#""siblings": {"../x": {"files": {"a": "b"}, "initial_commit": "s"}}, "script": ["go"]"#,
+        );
+        let (_dir, path) = tmp_scenario_dir("demo", &json);
+        let err = Scenario::load(&path).unwrap_err().to_string();
+        assert!(err.contains("sibling name"), "{err}");
+    }
+
+    #[test]
     fn scenario_requires_the_explicit_instruction() {
         let bare = VALID.replace(r#""explicit_instruction": "stop at review","#, "");
         let (_dir, path) = tmp_scenario_dir("demo", &bare);
@@ -365,6 +435,26 @@ mod tests {
                 behaviors.contains(&scenario.behavior.as_str()),
                 "{name}: no check names the scenario's behavior {:?}",
                 scenario.behavior
+            );
+        }
+    }
+
+    /// The human index mirrors the files `--split` actually selects, and states
+    /// the fidelity ruling the reconstructions are graded under.
+    #[test]
+    fn the_corpus_index_names_every_scenario_and_the_fidelity_ruling() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("evals");
+        let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+        assert!(
+            readme.contains(
+                "Reconstructed scenarios are regression verification and claim no reproduction of the original incidents."
+            ),
+            "evals/README is missing the fidelity ruling"
+        );
+        for (name, _) in discover(&root.join("scenarios")).unwrap() {
+            assert!(
+                readme.contains(&name),
+                "{name} is missing from the corpus index in evals/README.md"
             );
         }
     }

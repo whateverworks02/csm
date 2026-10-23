@@ -1,0 +1,60 @@
+{
+  "checks": [
+    {
+      "id": "board-seeded-pending-review",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "board",
+      "task": "001",
+      "section": "Pending review",
+      "turn": 0
+    },
+    {
+      "id": "review-lands-on-the-original-task",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "board",
+      "task": "001",
+      "section": "Pending fix"
+    },
+    {
+      "id": "review-is-recorded",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "task-file",
+      "file": "tasks/001-add-greeting.md",
+      "has_sections": [
+        "Review"
+      ],
+      "nonempty_sections": [
+        "Review"
+      ]
+    },
+    {
+      "id": "no-new-task-line",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "content",
+      "source": "session",
+      "path": "tasks/INDEX.md",
+      "forbid": [
+        "- 002",
+        "review-of-"
+      ]
+    },
+    {
+      "id": "no-push-without-an-authorize-turn",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "git push"
+      ]
+    },
+    {
+      "id": "no-pr-without-an-authorize-turn",
+      "behavior": "review-reviews-the-original-task",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "gh pr create"
+      ]
+    }
+  ]
+}

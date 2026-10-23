@@ -1,0 +1,31 @@
+{
+  "name": "pr-conflict-stays-done",
+  "behavior": "open-pr-is-the-review-surface",
+  "description": "Task 001 is Done and its pull request is open with a merge conflict; the user asks for the conflict resolved and the PR description rewritten. The change rides the open PR, so the line stays Done and no new review stop appears.",
+  "split": "holdout",
+  "tags": [
+    "pr-feedback",
+    "conflict",
+    "review-surface",
+    "case-recurrence"
+  ],
+  "explicit_instruction": "Resolve the conflict in greet.py keeping the AC's greeting, commit on the branch already under review, rewrite the pull-request description in 001's Progress, and leave 001 at Done. Do not create a new task or a new pull request.",
+  "session": {
+    "name": "eval-fixture",
+    "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Done; its pull request is open and conflicts with main.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
+    "tasks_index_md": "# eval-fixture - tasks board\n\n> Each task: tasks/<id>-<slug>.md. Status = section.\n\n## Open\n\n## Pending review\n\n## Pending fix\n\n## Done\n- 001 add-greeting\n",
+    "task_files": {
+      "001-add-greeting.md": "# 001 add-greeting\n\n## Scope\n\nImplement `greet()` in `greet.py` so the module runs as a script and prints `hello, world`.\n\n## AC\n\n- `python3 greet.py` prints exactly `hello, world`.\n\n## SOP\n\n1. Implement `greet()`; keep the module runnable under `if __name__ == \"__main__\"`.\n2. Run `python3 greet.py` and verify the output.\n3. Commit the change.\n\n\n## Progress\n\nImplemented `greet()`; the branch is pushed and the pull request is open at https://example.invalid/pull/101. Review is the open PR, so the task is Done.\n\n## Review\n\n\n"
+    }
+  },
+  "repo": {
+    "files": {
+      "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
+      "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n<<<<<<< HEAD\n    return \"hi\"\n=======\n    return \"hello, world\"\n>>>>>>> origin/main\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
+    },
+    "initial_commit": "seed the greeting-demo fixture"
+  },
+  "script": [
+    "resolve the merge conflict on the PR and rewrite the PR description in 001's Progress"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "cross-repo-needs",
+  "behavior": "cross-repo-needs-gates-execution",
+  "description": "Two checkouts share one session. Task 001 is Done in the sibling `lib` checkout; task 002 here depends on it and is eligible; task 003 depends on a task in another session and is not. The run executes 002 only, leaves 003 Open, and does not invent a new session or task.",
+  "split": "holdout",
+  "tags": [
+    "cross-repo",
+    "needs",
+    "dependency"
+  ],
+  "explicit_instruction": "Task 002 is the eligible one: its dependency 001 is already Done on the shared board. Implement 002 in this checkout, record the outcome, and stop at Pending review. Leave 001 Done and 003 Open because its partner dependency is unmet. Do not create a new task, push, or open a pull request.",
+  "session": {
+    "name": "eval-fixture",
+    "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a greeting utility. Two checkouts share this session: this app repo (the cwd) and `lib` beside it, where `001 shared-helper` is Done. `002 add-app-greeting` is Open here; `003 partner-sync` waits on another session.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
+    "tasks_index_md": "# eval-fixture - tasks board\n\n> Each task: tasks/<id>-<slug>.md. Status = section.\n\n## Open\n- 002 add-app-greeting needs: 001\n- 003 partner-sync needs: partner/009\n\n## Pending review\n\n## Pending fix\n\n## Done\n- 001 shared-helper\n",
+    "task_files": {
+      "001-shared-helper.md": "# 001 shared-helper\n\n## Scope\n\nAdd the shared helper to the `lib` checkout.\n\n## AC\n\n- `lib/helper.py` exposes `greeting()`.\n\n## SOP\n\n1. Implement the helper in `lib/helper.py`.\n2. Commit.\n\n\n## Progress\n\nImplemented in the `lib` checkout and reviewed; Done.\n\n## Review\n\n\n",
+      "002-add-app-greeting.md": "# 002 add-app-greeting\n\n## Scope\n\nImplement `greet()` in this checkout's `greet.py` so the module runs as a script and prints `hello, world`. The dependency 001 is Done in the `lib` checkout.\n\n## AC\n\n- `python3 greet.py` prints exactly `hello, world`.\n\n## SOP\n\n1. Implement `greet()` in `greet.py`.\n2. Run `python3 greet.py` and verify the output.\n3. Commit the change.\n\n\n## Progress\n\n\n\n## Review\n\n\n",
+      "003-partner-sync.md": "# 003 partner-sync\n\n## Scope\n\nSync the greeting with the partner session's contract.\n\n## AC\n\n- The partner contract is read and the greeting matches it.\n\n## SOP\n\n1. Wait for `partner/009`; then implement the sync.\n\n\n## Progress\n\n\n\n## Review\n\n\n"
+    }
+  },
+  "siblings": {
+    "lib": {
+      "files": {
+        "README.md": "# helper-lib\n\nShared helpers for the demo project.\n",
+        "helper.py": "\"\"\"Shared helpers.\"\"\"\n\n\ndef greeting() -> str:\n    \"\"\"Return the greeting.\"\"\"\n    return \"hello, world\"\n"
+      },
+      "initial_commit": "seed the helper checkout"
+    }
+  },
+  "repo": {
+    "files": {
+      "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
+      "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n    raise NotImplementedError\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
+    },
+    "initial_commit": "seed the greeting-demo fixture"
+  },
+  "script": [
+    "execute the next eligible task"
+  ]
+}

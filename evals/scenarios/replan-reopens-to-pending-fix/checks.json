@@ -1,0 +1,47 @@
+{
+  "checks": [
+    {
+      "id": "board-seeded-done",
+      "behavior": "replan-status-routing",
+      "kind": "board",
+      "task": "001",
+      "section": "Done",
+      "turn": 0
+    },
+    {
+      "id": "board-sits-at-pending-fix",
+      "behavior": "replan-status-routing",
+      "kind": "board",
+      "task": "001",
+      "section": "Pending fix"
+    },
+    {
+      "id": "no-new-task-line",
+      "behavior": "replan-status-routing",
+      "kind": "content",
+      "source": "session",
+      "path": "tasks/INDEX.md",
+      "forbid": [
+        "- 002"
+      ]
+    },
+    {
+      "id": "no-push-without-an-authorize-turn",
+      "behavior": "replan-status-routing",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "git push"
+      ]
+    },
+    {
+      "id": "no-pr-without-an-authorize-turn",
+      "behavior": "replan-status-routing",
+      "kind": "trace",
+      "turns": "all",
+      "forbidden": [
+        "gh pr create"
+      ]
+    }
+  ]
+}

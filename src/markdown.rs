@@ -206,8 +206,8 @@ mod tests {
         #[test]
         fn multibyte_safe() {
             // Byte-offset markers must land on UTF-8 boundaries.
-            assert_eq!(strip_inline("**日本**"), "日本");
-            assert_eq!(strip_inline("[[リンク]]"), "リンク");
+            assert_eq!(strip_inline("**café**"), "café");
+            assert_eq!(strip_inline("[[naïve]]"), "naïve");
         }
     }
 
@@ -231,8 +231,8 @@ mod tests {
 
         #[test]
         fn counts_chars_not_bytes() {
-            // 6 chars, max 3 -> cut to 3 chars (would be 9 bytes if byte-counted).
-            assert_eq!(truncate("日本語テスト", 3), "日本語…");
+            // 6 chars, max 3 -> cut to 3 chars (would be 12 bytes if byte-counted).
+            assert_eq!(truncate("Ελλάδα", 3), "Ελλ…");
         }
 
         #[test]

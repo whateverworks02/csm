@@ -1,0 +1,30 @@
+{
+  "name": "note-request-creates-no-task",
+  "behavior": "record-maintenance-creates-no-task",
+  "description": "A note request in a session whose records already exist. Writing and registering the note is record maintenance within the existing scope; it creates no board line and changes no status.",
+  "split": "dev",
+  "tags": [
+    "record-maintenance",
+    "task-gate",
+    "post-v0-7"
+  ],
+  "explicit_instruction": "Write the note and register it in notes/INDEX.md. This is record maintenance, not a task: do not add a board line and do not push.",
+  "session": {
+    "name": "eval-fixture",
+    "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Done; the notes registry exists.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
+    "tasks_index_md": "# eval-fixture - tasks board\n\n> Each task: tasks/<id>-<slug>.md. Status = section.\n\n## Open\n\n## Pending review\n\n## Pending fix\n\n## Done\n- 001 add-greeting\n",
+    "task_files": {
+      "001-add-greeting.md": "# 001 add-greeting\n\n## Scope\n\nImplement `greet()` in `greet.py` so the module runs as a script and prints `hello, world`.\n\n## AC\n\n- `python3 greet.py` prints exactly `hello, world`.\n\n## SOP\n\n1. Implement `greet()`; keep the module runnable under `if __name__ == \"__main__\"`.\n2. Run `python3 greet.py` and verify the output.\n3. Commit the change.\n\n\n## Progress\n\nImplemented `greet()` in `greet.py`; `python3 greet.py` prints exactly `hello, world`.\n\n## Review\n\n\n"
+    }
+  },
+  "repo": {
+    "files": {
+      "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
+      "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n    return \"hello, world\"\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
+    },
+    "initial_commit": "seed the greeting-demo fixture"
+  },
+  "script": [
+    "write a short note at notes/greeting-purpose.md explaining what greet.py is for and register it in notes/INDEX.md"
+  ]
+}

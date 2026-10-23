@@ -344,23 +344,11 @@ pub fn scaffold_fixture_session(sb: &Sandbox, scenario: &Scenario) -> Result<()>
 /// Seed the fixture repo: fixed files, one initial commit under a fixed
 /// repo-local identity, and a local bare remote already pushed to.
 pub fn scaffold_fixture_repo(sb: &Sandbox, scenario: &Scenario) -> Result<()> {
-    git(&sb.repo, &["init", "-b", "main"])?;
-    // Fixed identity so commits carry no machine-local data.
-    git(&sb.repo, &["config", "user.name", "csm-eval"])?;
-    git(
+    init_committed_repo(
         &sb.repo,
-        &["config", "user.email", "csm-eval@fixture.invalid"],
+        &scenario.repo.files,
+        &scenario.repo.initial_commit,
     )?;
-    git(&sb.repo, &["config", "commit.gpgsign", "false"])?;
-    for (rel, content) in &scenario.repo.files {
-        let path = sb.repo.join(rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, content)?;
-    }
-    git(&sb.repo, &["add", "-A"])?;
-    git(&sb.repo, &["commit", "-m", &scenario.repo.initial_commit])?;
     std::process::Command::new("git")
         .arg("init")
         .arg("--bare")
@@ -374,6 +362,42 @@ pub fn scaffold_fixture_repo(sb: &Sandbox, scenario: &Scenario) -> Result<()> {
         &["remote", "add", "origin", &sb.remote.display().to_string()],
     )?;
     git(&sb.repo, &["push", "-u", "origin", "main"])?;
+    Ok(())
+}
+
+/// Seed each sibling checkout next to the cwd repo. They share the fixture
+/// session (the env binds one `$CSM_SESSION`); they are not nested in the cwd
+/// repo, so a commit there does not land in this repo's history.
+pub fn scaffold_siblings(sb: &Sandbox, scenario: &Scenario) -> Result<()> {
+    for (name, sibling) in &scenario.siblings {
+        let dir = sb.root.join(name);
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating sibling {name}"))?;
+        init_committed_repo(&dir, &sibling.files, &sibling.initial_commit)
+            .with_context(|| format!("seeding sibling {name}"))?;
+    }
+    Ok(())
+}
+
+/// One commit under the fixed eval identity. Shared by the cwd repo and any
+/// sibling checkout so neither carries a machine-local author.
+fn init_committed_repo(
+    dir: &Path,
+    files: &std::collections::BTreeMap<String, String>,
+    message: &str,
+) -> Result<()> {
+    git(dir, &["init", "-b", "main"])?;
+    git(dir, &["config", "user.name", "csm-eval"])?;
+    git(dir, &["config", "user.email", "csm-eval@fixture.invalid"])?;
+    git(dir, &["config", "commit.gpgsign", "false"])?;
+    for (rel, content) in files {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)?;
+    }
+    git(dir, &["add", "-A"])?;
+    git(dir, &["commit", "-m", message])?;
     Ok(())
 }
 
@@ -532,6 +556,7 @@ mod tests {
                 files,
                 initial_commit: String::from("seed"),
             },
+            siblings: BTreeMap::new(),
             script: vec![String::from("go")],
         }
     }
@@ -783,6 +808,45 @@ mod tests {
         assert!(text.contains("(deny file-write*)"));
         assert!(text.contains(&format!("(subpath \"{}\")", root.display())));
         assert!(text.contains("(subpath \"/dev\")"));
+        sb.remove().unwrap();
+    }
+
+    /// A sibling checkout shares the session but not the cwd repo's history.
+    #[test]
+    fn sibling_checkout_sits_beside_the_cwd_repo() {
+        let sb = Sandbox::create().unwrap();
+        let mut scenario = minimal_scenario("sibling-it");
+        let mut files = BTreeMap::new();
+        files.insert(
+            String::from("helper.py"),
+            String::from("def helper() -> str:\n    return \"hello, world\"\n"),
+        );
+        scenario.siblings.insert(
+            String::from("lib"),
+            crate::scenario::SiblingRepo {
+                files,
+                initial_commit: String::from("seed the helper"),
+            },
+        );
+        scaffold_fixture_repo(&sb, &scenario).unwrap();
+        scaffold_siblings(&sb, &scenario).unwrap();
+
+        assert!(sb.root.join("lib").join(".git").is_dir());
+        assert!(
+            !sb.repo.join("lib").exists(),
+            "a sibling must not be nested in the cwd repo"
+        );
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(sb.root.join("lib"))
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "seed the helper"
+        );
         sb.remove().unwrap();
     }
 }
