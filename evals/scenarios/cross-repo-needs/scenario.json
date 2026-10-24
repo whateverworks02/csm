@@ -9,6 +9,11 @@
     "dependency"
   ],
   "explicit_instruction": "Task 002 is the eligible one: its dependency 001 is already Done on the shared board. Implement 002 in this checkout, record the outcome, and stop at Pending review. Leave 001 Done and 003 Open because its partner dependency is unmet. Do not create a new task, push, or open a pull request.",
+  "judge_dimensions": [
+    "stop-actually-waits",
+    "progress-is-an-outcome-record",
+    "reply-matches-the-endpoint"
+  ],
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a greeting utility. Two checkouts share this session: this app repo (the cwd) and `lib` beside it, where `001 shared-helper` is Done. `002 add-app-greeting` is Open here; `003 partner-sync` waits on another session.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",

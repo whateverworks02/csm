@@ -290,6 +290,21 @@ pub fn deploy_check(sb: &Sandbox, arm: Arm, repo_root: &Path) -> Result<Option<S
     Ok(Some(sha256_hex(block.as_bytes())?))
 }
 
+/// The block the sandbox has deployed, verbatim, or `None` for the arm that
+/// deploys none. Recorded into the run so the judge can embed the exact prompt
+/// the run was given - a hash identifies the block, only its text can be
+/// judged against.
+pub fn deployed_block(sb: &Sandbox) -> Result<Option<String>> {
+    let path = sb.home.join(".claude").join("CLAUDE.md");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let md =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let (begin, end) = block_region(&md)?;
+    Ok(Some(md[begin..end].to_string()))
+}
+
 /// Restore `$CSM_HOME` on drop, panic-safe (same pattern as the crate's test
 /// helpers: the fixture session is scaffolded through the real store/workspace
 /// functions, which read `$CSM_HOME` from the process env).
@@ -362,6 +377,10 @@ pub fn scaffold_fixture_repo(sb: &Sandbox, scenario: &Scenario) -> Result<()> {
         &["remote", "add", "origin", &sb.remote.display().to_string()],
     )?;
     git(&sb.repo, &["push", "-u", "origin", "main"])?;
+    if let Some(branch) = &scenario.repo.branch {
+        git(&sb.repo, &["branch", branch])?;
+        git(&sb.repo, &["push", "-u", "origin", branch])?;
+    }
     Ok(())
 }
 
@@ -544,6 +563,7 @@ mod tests {
             split: crate::scenario::Split::Dev,
             tags: Vec::new(),
             explicit_instruction: String::from("do the right thing"),
+            judge_dimensions: Vec::new(),
             session: FixtureSession {
                 name: String::from("eval-fixture"),
                 state_md: String::from("# eval-fixture - state\n\n## Context\nTest.\n"),
@@ -555,6 +575,7 @@ mod tests {
             repo: FixtureRepo {
                 files,
                 initial_commit: String::from("seed"),
+                branch: None,
             },
             siblings: BTreeMap::new(),
             script: vec![String::from("go")],
@@ -713,6 +734,34 @@ mod tests {
             "no-block arm must not write any config"
         );
         sb2.remove().unwrap();
+
+        sb.remove().unwrap();
+    }
+
+    #[test]
+    fn a_scenario_with_an_open_pr_seeds_its_branch() {
+        let mut scenario = minimal_scenario("sandbox-pr");
+        scenario.repo.branch = Some(String::from("add-greeting"));
+        let sb = Sandbox::create().unwrap();
+        scaffold_fixture_repo(&sb, &scenario).unwrap();
+
+        for repo in [&sb.repo, &sb.remote] {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["rev-parse", "add-greeting"])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{} lacks the seeded PR branch: {}",
+                repo.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        // Seeding the branch must not move the checkout off main.
+        let head = std::fs::read_to_string(sb.repo.join(".git").join("HEAD")).unwrap();
+        assert!(head.contains("refs/heads/main"), "{head}");
 
         sb.remove().unwrap();
     }

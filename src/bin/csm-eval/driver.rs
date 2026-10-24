@@ -71,6 +71,39 @@ pub trait EvalAgent {
     /// Pull (session_id, model) out of a turn's event stream. `session_id` is
     /// required after turn 1 (resume target); `model` feeds the manifest.
     fn identify(&self, trace_lines: &[String]) -> (Option<String>, Option<String>);
+
+    /// The command for one judge call: the same CLI the run used, outside any
+    /// sandbox, with the rubric arriving on stdin. The call grants no tool
+    /// permission and runs headless, so a tool use would be denied; the rubric
+    /// carries the evidence the judge is meant to read.
+    fn judge_command(&self, model: Option<&str>, cwd: &Path) -> Command;
+
+    /// The answer text in a judge call's event stream. Shape-drift tolerant in
+    /// the same way trace matching is: the assistant's text blocks, falling
+    /// back to the harness's own result field.
+    fn judge_reply(&self, trace_lines: &[String]) -> String {
+        let text = crate::checks::assistant_text_all(trace_lines);
+        if !text.trim().is_empty() {
+            return text;
+        }
+        trace_lines
+            .iter()
+            .rev()
+            .find_map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v.get("result")?.as_str().map(String::from))
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// The environment one judge call runs under: the operator's own, minus the
+/// csm session binding. The deployed block is dormant while `$CSM_SESSION` is
+/// unset, so the judge is not itself running under the prompt it is judging.
+fn judge_env(cmd: &mut Command) {
+    cmd.env_remove("CSM_SESSION");
+    cmd.env_remove("CSM_HOME");
 }
 
 pub fn driver_for(harness: Harness) -> Box<dyn EvalAgent> {
@@ -144,6 +177,19 @@ impl EvalAgent for ClaudeDriver {
         found
     }
 
+    fn judge_command(&self, model: Option<&str>, cwd: &Path) -> Command {
+        let mut cmd = Command::new("claude");
+        // `-p` with no prompt argument reads the rubric from stdin: the
+        // assembled evidence is far past what an argv can carry.
+        cmd.args(["-p", "--output-format", "stream-json", "--verbose"]);
+        if let Some(model) = model {
+            cmd.args(["--model", model]);
+        }
+        judge_env(&mut cmd);
+        cmd.current_dir(cwd);
+        cmd
+    }
+
     fn identify(&self, trace_lines: &[String]) -> (Option<String>, Option<String>) {
         // The `system/init` event carries the session id and resolved model.
         for line in trace_lines {
@@ -183,15 +229,23 @@ const CODEX_EXEC_FLAGS: [&str; 6] = [
 ];
 
 impl CodexDriver {
-    fn base_command(&self, args: &TurnArgs) -> Command {
-        let repo = args.sb.repo.display().to_string();
+    /// `codex exec` against `dir`, without the per-turn prompt. A judge call
+    /// and a scripted turn differ only in what they run against and what they
+    /// are asked, so the flags live here once.
+    fn base_command_at(&self, dir: &Path) -> Command {
+        let dir = dir.display().to_string();
         let flags: Vec<&str> = CODEX_EXEC_FLAGS
             .iter()
-            .map(|f| if *f == "REPO" { repo.as_str() } else { *f })
+            .map(|f| if *f == "REPO" { dir.as_str() } else { *f })
             .collect();
         let mut cmd = Command::new("codex");
         cmd.arg("exec");
         cmd.args(&flags);
+        cmd
+    }
+
+    fn base_command(&self, args: &TurnArgs) -> Command {
+        let mut cmd = self.base_command_at(&args.sb.repo);
         if let Some(model) = args.model {
             cmd.args(["-m", model]);
         }
@@ -258,6 +312,16 @@ impl EvalAgent for CodexDriver {
         found
     }
 
+    fn judge_command(&self, model: Option<&str>, cwd: &Path) -> Command {
+        let mut cmd = self.base_command_at(cwd);
+        if let Some(model) = model {
+            cmd.args(["-m", model]);
+        }
+        judge_env(&mut cmd);
+        cmd.current_dir(cwd);
+        cmd
+    }
+
     fn identify(&self, trace_lines: &[String]) -> (Option<String>, Option<String>) {
         // Codex event shapes drift between versions; hunt for a session/thread
         // id anywhere in the stream, top level or nested.
@@ -285,23 +349,37 @@ impl EvalAgent for CodexDriver {
 
 /// Run one turn: spawn, stream stdout line-by-line into the trace file
 /// (progressive, so a crash or timeout still leaves a usable trace), cap
-/// stderr, kill on timeout. Stdin is null - a harness prompting for input
-/// reads EOF instead of hanging.
+/// stderr, kill on timeout. Without `stdin_text` stdin is null - a harness
+/// prompting for input reads EOF instead of hanging; with it, the text is fed
+/// on a writer thread, so a message larger than the pipe buffer (the judge's
+/// assembled evidence) cannot deadlock against the child's output.
 pub fn run_turn(
     cmd: Command,
     timeout: Duration,
+    stdin_text: Option<&str>,
     trace_path: &Path,
     stderr_path: &Path,
 ) -> Result<TurnResult> {
     let mut cmd = cmd;
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    match stdin_text {
+        Some(_) => cmd.stdin(Stdio::piped()),
+        None => cmd.stdin(Stdio::null()),
+    };
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", cmd.get_program().to_string_lossy()))?;
     let stdout = child.stdout.take().context("turn stdout")?;
     let stderr = child.stderr.take().context("turn stderr")?;
+    if let Some(text) = stdin_text {
+        let mut stdin = child.stdin.take().context("turn stdin")?;
+        let payload = text.as_bytes().to_vec();
+        std::thread::spawn(move || {
+            // A child that exits before reading closes the pipe; the broken
+            // write is the child's answer, not ours to report.
+            let _ = stdin.write_all(&payload);
+        });
+    }
 
     let trace_path = trace_path.to_path_buf();
     let reader = std::thread::spawn(move || {
@@ -551,6 +629,78 @@ mod tests {
         let started = r#"{"type":"thread.started","thread_id":"th-9"}"#;
         let (sid, _) = CodexDriver.identify(&[started.to_string()]);
         assert_eq!(sid.as_deref(), Some("th-9"));
+    }
+
+    /// The judge call is the same CLI as the run, outside any sandbox: no
+    /// session binding, no scratch HOME, and the rubric on stdin.
+    #[test]
+    fn claude_judge_call_reads_stdin_outside_the_sandbox() {
+        let cwd = std::env::temp_dir();
+        let cmd = ClaudeDriver.judge_command(Some("judge-model"), &cwd);
+        let flat: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(cmd.get_program(), "claude");
+        assert!(flat.contains(&"-p".to_string()));
+        assert!(flat.contains(&"--output-format".to_string()));
+        assert!(flat.contains(&"--verbose".to_string()));
+        assert_eq!(
+            flat.iter()
+                .position(|a| a == "--model")
+                .map(|i| &flat[i + 1]),
+            Some(&"judge-model".to_string())
+        );
+        assert_eq!(cmd.get_current_dir(), Some(cwd.as_path()));
+        // The prompt arrives on stdin, so `-p` carries no argument.
+        let p = flat.iter().position(|a| a == "-p").unwrap();
+        assert_eq!(flat[p + 1], "--output-format");
+        // The operator's own environment, minus the session binding that would
+        // wake the deployed block up in the judge's own context.
+        assert_eq!(env_of(&cmd, "CSM_SESSION"), None);
+        assert_eq!(env_of(&cmd, "CSM_HOME"), None);
+        assert_eq!(
+            env_of(&cmd, "HOME"),
+            None,
+            "HOME is inherited, not replaced"
+        );
+    }
+
+    #[test]
+    fn codex_judge_call_runs_exec_against_the_judge_dir() {
+        let cwd = std::env::temp_dir();
+        let cmd = CodexDriver.judge_command(None, &cwd);
+        let flat: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(cmd.get_program(), "codex");
+        assert_eq!(flat[0], "exec");
+        assert!(flat.contains(&"--json".to_string()));
+        let c = flat.iter().position(|a| a == "-C").unwrap();
+        assert_eq!(flat[c + 1], cwd.display().to_string());
+        // No positional prompt: it arrives on stdin.
+        assert_eq!(flat.last().unwrap(), "--skip-git-repo-check");
+        assert_eq!(env_of(&cmd, "CSM_SESSION"), None);
+    }
+
+    #[test]
+    fn the_judge_reply_is_the_assistant_text_or_the_result_field() {
+        let blocks = [
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"{\"verdicts\":[]}"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"ignored when text exists"}"#,
+        ];
+        let lines: Vec<String> = blocks.iter().map(|s| s.to_string()).collect();
+        assert_eq!(ClaudeDriver.judge_reply(&lines), "{\"verdicts\":[]}");
+
+        // A stream with no text block at all falls back to the harness's own
+        // result field.
+        let only_result = vec![
+            r#"{"type":"system","subtype":"init","session_id":"s"}"#.to_string(),
+            r#"{"type":"result","subtype":"success","result":"{\"verdicts\":[]}"}"#.to_string(),
+        ];
+        assert_eq!(ClaudeDriver.judge_reply(&only_result), "{\"verdicts\":[]}");
+        assert_eq!(ClaudeDriver.judge_reply(&[]), "");
     }
 
     #[test]

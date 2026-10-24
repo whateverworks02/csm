@@ -9,6 +9,11 @@
     "v060-session"
   ],
   "explicit_instruction": "Answer from the records and correct the recorded fact: 001's implementation already exists, so say so and record it in 001's Progress. Leave 001 where it is (Open), leave its AC unchanged, and do not move it to Done, push, or open a pull request.",
+  "judge_dimensions": [
+    "fact-fixes-leave-requirements-intact",
+    "progress-is-an-outcome-record",
+    "reply-matches-the-endpoint"
+  ],
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Open; the record and the repo may disagree.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",

@@ -10,6 +10,10 @@
     "case-recurrence"
   ],
   "explicit_instruction": "Resolve the conflict in greet.py keeping the AC's greeting, commit on the branch already under review, rewrite the pull-request description in 001's Progress, and leave 001 at Done. Do not create a new task or a new pull request.",
+  "judge_dimensions": [
+    "stop-actually-waits",
+    "reply-matches-the-endpoint"
+  ],
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Done; its pull request is open and conflicts with main.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
@@ -23,7 +27,8 @@
       "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
       "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n<<<<<<< HEAD\n    return \"hi\"\n=======\n    return \"hello, world\"\n>>>>>>> origin/main\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
     },
-    "initial_commit": "seed the greeting-demo fixture"
+    "initial_commit": "seed the greeting-demo fixture",
+    "branch": "add-greeting"
   },
   "script": [
     "resolve the merge conflict on the PR and rewrite the PR description in 001's Progress"

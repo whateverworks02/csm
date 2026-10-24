@@ -45,6 +45,21 @@ evals/
 
 A scenario may add `siblings` to seed a second checkout beside the cwd repo. Both checkouts share the fixture session; a sibling is not nested in the cwd repo, so its commits do not land in this repo's history. The grader snapshots the cwd repo and the session only.
 
+A scenario whose premise includes an already-open pull request adds `repo.branch`: the branch is created from the seed commit and pushed to the fixture remote, so the agent finds the branch the records refer to. Without it the fixture contradicts its own premise. These scenarios do not forbid `git push` - delivering the change to the named PR is the request's endpoint - but they still forbid opening a new PR.
+
+## Judge dimensions
+
+A scenario's `judge_dimensions` names which of the judge layer's fixed dimensions its script exercises; a run judges those with a local model pass and records the verdicts beside the deterministic ones. The set is fixed in `src/bin/csm-eval/judge.rs` - a scenario can only declare, never invent:
+
+- `stop-actually-waits` - reached the request's endpoint and waited, rather than acting past the gate.
+- `progress-is-an-outcome-record` - Progress records the state the work arrived at, not a dated narrative.
+- `fact-fixes-leave-requirements-intact` - a fact correction left Scope, AC, user decisions and board status alone.
+- `reply-matches-the-endpoint` - the reply reports the endpoint the request table names for that request.
+
+Declare a dimension only when the script gives the judge something to decide. The two observation scenarios (`multi-task-grant-stop`, `cross-phase-delegation`) declare `progress-is-an-outcome-record` alone: where the run stops is the unruled question they observe, so judging the stop would import a ruling. An undeclared dimension carries no cell at all, never a vacuous pass.
+
+The progress dimension judges the form of a record, not whether one exists: an empty Progress passes it, and the deterministic layer owns existence. Every scenario that declares the dimension therefore also carries a `nonempty_sections: ["Progress"]` check on the task the run edits - `execute-stops`, `fact-fix`, `modification`, `resume`, `no-bookkeeping`, and `cross-repo` (task 002). The two observation scenarios are exempt: their scripts do not rule how far the run goes, so a required record would encode the ruling they observe.
+
 ## Running
 
 ```

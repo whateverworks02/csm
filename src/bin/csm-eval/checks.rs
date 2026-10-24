@@ -532,6 +532,17 @@ fn tool_calls(line: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Every assistant text block across a stream, joined by newlines - the
+/// harness's own answer, whichever harness produced it. Shared with the judge
+/// layer, which reads a model's reply out of the same event shape.
+pub(crate) fn assistant_text_all(lines: &[String]) -> String {
+    lines
+        .iter()
+        .flat_map(|l| assistant_text(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Assistant text in one trace line (claude text blocks, codex agent messages).
 fn assistant_text(line: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -638,13 +649,16 @@ impl RepDir {
 
     /// One of a checkpoint's repo state texts, named by
     /// [`artifacts::Checkpoint::repo_texts`].
-    fn repo_text(&self, name: &str) -> Option<String> {
+    pub(crate) fn repo_text(&self, name: &str) -> Option<String> {
         std::fs::read_to_string(self.path.join(name)).ok()
     }
 
     /// One turn's trace lines. Harness-injected context is dropped here, so
-    /// every reader sees the agent's own stream.
-    fn trace_lines(&self, turn: u32) -> Result<Vec<String>> {
+    /// every reader sees the agent's own stream. The judge layer reads the
+    /// recorded file whole instead: what the harness injected is context the
+    /// agent received, which is evidence about the run even though it can
+    /// satisfy no check.
+    pub(crate) fn trace_lines(&self, turn: u32) -> Result<Vec<String>> {
         let path = artifacts::turn_trace(&self.path, turn as usize);
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -655,13 +669,19 @@ impl RepDir {
             .collect())
     }
 
+    /// One turn's trace as the harness wrote it, injected lines included.
+    pub(crate) fn recorded_trace(&self, turn: u32) -> Result<String> {
+        let path = artifacts::turn_trace(&self.path, turn as usize);
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
+    }
+
     /// One file under a session snapshot, by relative path.
     fn session_file(&self, turn: Turn, rel: &str) -> Option<String> {
         std::fs::read_to_string(self.session_dir(turn).join(rel)).ok()
     }
 
     /// Every file under a session snapshot, keyed by relative path.
-    fn session_files(&self, turn: Turn) -> BTreeMap<String, Vec<u8>> {
+    pub(crate) fn session_files(&self, turn: Turn) -> BTreeMap<String, Vec<u8>> {
         let mut out = BTreeMap::new();
         collect_files(&self.session_dir(turn), &self.session_dir(turn), &mut out);
         out
@@ -1121,11 +1141,7 @@ fn eval_reply(turn: Turn, non_empty: bool, rep: &RepDir) -> Outcome {
     let Ok(lines) = rep.trace_lines(index) else {
         return Outcome::fail(format!("turn {index} trace unreadable"));
     };
-    let text: String = lines
-        .iter()
-        .flat_map(|l| assistant_text(l))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = assistant_text_all(&lines);
     let chars = text.trim().chars().count();
     match (non_empty, chars == 0) {
         (true, false) => Outcome::pass(format!("turn {index} replied ({chars} chars)")),

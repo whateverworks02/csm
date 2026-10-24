@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -170,6 +170,11 @@ pub struct FixtureRepo {
     pub files: BTreeMap<String, String>,
     /// The initial commit message.
     pub initial_commit: String,
+    /// Branch an already-open pull request lives on. Seeded from the initial
+    /// commit and pushed to the fixture remote so the scenario's premise is
+    /// represented in the repo; `None` for a scenario with no open PR.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 /// A second checkout beside the agent's cwd, sharing the fixture session.
@@ -202,6 +207,12 @@ pub struct Scenario {
     /// graded against its own answer key.
     #[serde(default)]
     pub explicit_instruction: String,
+    /// Which of the judge layer's fixed dimensions this scenario exercises. A
+    /// dimension named here that the script never exercises is a corpus bug the
+    /// spot-check catches; a dimension not named carries no cell at all, so the
+    /// judged surface stays the one the corpus declares.
+    #[serde(default)]
+    pub judge_dimensions: Vec<String>,
     pub session: FixtureSession,
     pub repo: FixtureRepo,
     /// Other checkouts sharing this session, keyed by directory name. Each is
@@ -243,6 +254,31 @@ impl Scenario {
         }
         if scenario.tags.iter().any(|t| t.trim().is_empty()) {
             anyhow::bail!("scenario {:?} carries an empty tag", scenario.name);
+        }
+        if let Some(branch) = &scenario.repo.branch {
+            if branch.trim().is_empty() || branch == "main" || branch.starts_with('-') {
+                anyhow::bail!(
+                    "scenario {:?}: PR branch {branch:?} must be a non-main branch name",
+                    scenario.name
+                );
+            }
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        for id in &scenario.judge_dimensions {
+            if crate::judge::dimension(id).is_none() {
+                let known: Vec<&str> = crate::judge::DIMENSIONS.iter().map(|d| d.id).collect();
+                anyhow::bail!(
+                    "scenario {:?} names judge dimension {id:?}; the dimensions are fixed ({})",
+                    scenario.name,
+                    known.join(", ")
+                );
+            }
+            if !seen.insert(id.as_str()) {
+                anyhow::bail!(
+                    "scenario {:?} names judge dimension {id:?} twice",
+                    scenario.name
+                );
+            }
         }
         for (name, sibling) in &scenario.siblings {
             if !is_sibling_name(name) {
@@ -384,6 +420,32 @@ mod tests {
         assert!(err.contains("does not match"), "{err}");
     }
 
+    /// The judge's dimensions are fixed: a scenario declares which of them it
+    /// exercises, and cannot invent one.
+    #[test]
+    fn scenario_validates_its_judge_dimensions() {
+        let declared = VALID.replace(
+            r#""description": "d","#,
+            r#""description": "d", "judge_dimensions": ["stop-actually-waits"],"#,
+        );
+        let (_dir, path) = tmp_scenario_dir("demo", &declared);
+        let s = Scenario::load(&path).unwrap();
+        assert_eq!(s.judge_dimensions, vec!["stop-actually-waits"]);
+
+        let unknown = declared.replace("stop-actually-waits", "vibes");
+        let (_dir, path) = tmp_scenario_dir("demo", &unknown);
+        let err = Scenario::load(&path).unwrap_err().to_string();
+        assert!(err.contains("the dimensions are fixed"), "{err}");
+
+        let twice = declared.replace(
+            r#"["stop-actually-waits"]"#,
+            r#"["stop-actually-waits", "stop-actually-waits"]"#,
+        );
+        let (_dir, path) = tmp_scenario_dir("demo", &twice);
+        let err = Scenario::load(&path).unwrap_err().to_string();
+        assert!(err.contains("twice"), "{err}");
+    }
+
     #[test]
     fn scenario_rejects_empty_script() {
         let empty = VALID.replace(r#""script": ["go", "how did it go?"]"#, r#""script": []"#);
@@ -435,6 +497,51 @@ mod tests {
                 behaviors.contains(&scenario.behavior.as_str()),
                 "{name}: no check names the scenario's behavior {:?}",
                 scenario.behavior
+            );
+        }
+        // A scenario may be deterministic-only, but a corpus in which no
+        // scenario declares a dimension never exercises the judge layer at all
+        // - which would be a corpus gap, not a choice.
+        assert!(
+            found.iter().any(|(_, s)| !s.judge_dimensions.is_empty()),
+            "no scenario under {} declares a judge dimension",
+            root.display()
+        );
+    }
+
+    /// The progress dimension defers record existence to the deterministic
+    /// layer, so a scenario that declares it must carry the existence check.
+    /// Observation scenarios are exempt: how far their run goes is the
+    /// unruled question, so a required record would encode the ruling.
+    #[test]
+    fn every_progress_judged_scenario_carries_the_existence_check() {
+        use crate::checks::CheckKind;
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("evals")
+            .join("scenarios");
+        for (name, scenario) in discover(&root).unwrap() {
+            if !scenario
+                .judge_dimensions
+                .iter()
+                .any(|d| d == "progress-is-an-outcome-record")
+                || scenario.tags.iter().any(|t| t == "observation")
+            {
+                continue;
+            }
+            let checks =
+                crate::checks::ChecksFile::load(&Scenario::checks_path(&root.join(&name))).unwrap();
+            let covered = checks.checks.iter().any(|c| {
+                matches!(
+                    &c.kind,
+                    CheckKind::TaskFile {
+                        nonempty_sections,
+                        ..
+                    } if nonempty_sections.iter().any(|s| s == "Progress")
+                )
+            });
+            assert!(
+                covered,
+                "{name}: declares the progress dimension without a non-empty Progress check"
             );
         }
     }
