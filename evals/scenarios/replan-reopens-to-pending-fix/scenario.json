@@ -9,6 +9,10 @@
     "post-v0-7"
   ],
   "explicit_instruction": "This turn changes the plan only: amend 001's Scope/AC, move 001 from Done to Pending fix, and stop there. Do not implement the change in this turn, create a new task, push, or open a pull request.",
+  "judge_dimensions": [
+    "stop-actually-waits",
+    "reply-matches-the-endpoint"
+  ],
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Done and its pull request is open; the user wants its requirement adjusted.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",

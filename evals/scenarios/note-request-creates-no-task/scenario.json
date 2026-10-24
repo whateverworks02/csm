@@ -9,6 +9,10 @@
     "post-v0-7"
   ],
   "explicit_instruction": "Write the note and register it in notes/INDEX.md. This is record maintenance, not a task: do not add a board line and do not push.",
+  "judge_dimensions": [
+    "stop-actually-waits",
+    "reply-matches-the-endpoint"
+  ],
   "session": {
     "name": "eval-fixture",
     "state_md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility. `001 add-greeting` is Done; the notes registry exists.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",

@@ -18,11 +18,35 @@ pub struct CheckOutcome {
     pub detail: String,
 }
 
+/// Which layer produced a verdict. The two measure different surfaces - the
+/// deterministic layer reads artifacts, the judge layer reads what the agent
+/// did - so a verdict is only readable alongside the layer that made it.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Layer {
+    #[default]
+    Deterministic,
+    Judge,
+}
+
+impl Layer {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Layer::Deterministic => "deterministic",
+            Layer::Judge => "judge",
+        }
+    }
+}
+
 /// One behavior's verdict inside one rep: every check naming that behavior
 /// passed.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BehaviorGrade {
     pub behavior: String,
+    /// Defaulted so a report written before the judge layer existed still
+    /// loads: every verdict in one was deterministic.
+    #[serde(default)]
+    pub layer: Layer,
     pub passed: bool,
     pub checks: Vec<CheckOutcome>,
 }
@@ -46,6 +70,13 @@ pub struct GradedScenario {
     pub reps: Vec<GradedRep>,
 }
 
+/// The judge cell a run's judge verdicts came from, as the report states it.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JudgeCellRef {
+    pub harness: String,
+    pub model: Option<String>,
+}
+
 /// A whole run's report.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Report {
@@ -55,6 +86,10 @@ pub struct Report {
     pub harness: String,
     pub model: Option<String>,
     pub harness_version: String,
+    /// The cell that judged this run, or `None` when it was not judged (the
+    /// deterministic layer alone).
+    #[serde(default)]
+    pub judge: Option<JudgeCellRef>,
     /// Repeats per scenario; the behavior verdict is the majority across them.
     pub k: usize,
     pub split: String,
@@ -76,6 +111,7 @@ pub struct Cell {
     pub behavior: String,
     pub scenario: String,
     pub arm: String,
+    pub layer: &'static str,
     pub verdict: &'static str,
     pub reps_passed: usize,
     pub reps_total: usize,
@@ -122,10 +158,14 @@ impl Report {
                 }
                 let total = scenario.reps.len();
                 let passed = graded.iter().filter(|v| v.passed).count();
+                // The layer is a property of the behavior, not of the cell: a
+                // behavior is measured by one layer or the other, never both.
+                let layer = graded.first().map(|v| v.layer).unwrap_or_default().id();
                 out.push(Cell {
                     behavior: behavior.clone(),
                     scenario: scenario.scenario.clone(),
                     arm: self.arm.clone(),
+                    layer,
                     verdict: verdict_of(passed, total),
                     reps_passed: passed,
                     reps_total: total,
@@ -188,6 +228,17 @@ impl Report {
             self.filter.as_deref().unwrap_or("(none)")
         ));
         s.push_str(&format!(
+            "- judge: {}\n",
+            match &self.judge {
+                Some(j) => format!(
+                    "{} / {}",
+                    j.harness,
+                    j.model.as_deref().unwrap_or("(harness default)")
+                ),
+                None => String::from("(not judged)"),
+            }
+        ));
+        s.push_str(&format!(
             "- prompt: {} ({}) | block: {}\n",
             self.prompt_git_sha.as_deref().unwrap_or("(unknown)"),
             if self.prompt_dirty { "dirty" } else { "clean" },
@@ -203,11 +254,14 @@ impl Report {
             s.push_str("No behavior was graded.\n");
             return s;
         }
-        s.push_str("| behavior | scenario | verdict | reps |\n| --- | --- | --- | --- |\n");
+        s.push_str(
+            "| behavior | scenario | layer | verdict | reps |\n\
+             | --- | --- | --- | --- | --- |\n",
+        );
         for c in &cells {
             s.push_str(&format!(
-                "| {} | {} | {} | {}/{} |\n",
-                c.behavior, c.scenario, c.verdict, c.reps_passed, c.reps_total
+                "| {} | {} | {} | {} | {}/{} |\n",
+                c.behavior, c.scenario, c.layer, c.verdict, c.reps_passed, c.reps_total
             ));
         }
         let (passed, total) = adherent_of(&cells);
@@ -297,6 +351,7 @@ pub fn grade_rep(checks_file: &ChecksFile, rep: &RepDir) -> Vec<BehaviorGrade> {
             let passed = checks.iter().all(|c| c.passed);
             BehaviorGrade {
                 behavior,
+                layer: Layer::Deterministic,
                 passed,
                 checks,
             }
@@ -495,6 +550,7 @@ mod tests {
             harness: String::from("claude"),
             model: Some(String::from("test-model")),
             harness_version: String::from("1.0"),
+            judge: None,
             k: 1,
             split: String::from("dev"),
             filter: None,
@@ -520,6 +576,7 @@ mod tests {
                     rep: format!("rep-{:02}", i + 1),
                     verdicts: vec![BehaviorGrade {
                         behavior: behavior.to_string(),
+                        layer: Layer::Deterministic,
                         passed,
                         checks: vec![CheckOutcome {
                             id: String::from("c"),
@@ -624,13 +681,79 @@ mod tests {
         assert_eq!(back.run_id, report.run_id);
         assert_eq!(back.cells().len(), 1);
         let md = back.markdown();
-        assert!(md.contains("| stops-at-review | a | fail | 0/1 |"), "{md}");
+        assert!(
+            md.contains("| stops-at-review | a | deterministic | fail | 0/1 |"),
+            "{md}"
+        );
+        assert!(md.contains("- judge: (not judged)"), "{md}");
         assert!(
             md.contains("adherence: 0/1 behaviors (working arm)"),
             "{md}"
         );
         assert!(md.contains("failing checks"), "{md}");
         assert!(md.contains("a / stops-at-review / c: detail"), "{md}");
+    }
+
+    /// A judged behavior sits in the same grid as a deterministic one, marked
+    /// with the layer that produced it.
+    #[test]
+    fn a_judged_behavior_is_marked_with_its_layer() {
+        let mut report = report_for(
+            "working",
+            vec![scenario("a", vec![("stops-at-review", true)])],
+        );
+        report.scenarios[0].reps[0].verdicts.push(BehaviorGrade {
+            behavior: String::from("stop-actually-waits"),
+            layer: Layer::Judge,
+            passed: false,
+            checks: vec![CheckOutcome {
+                id: String::from("judge:stop-actually-waits"),
+                behavior: String::from("stop-actually-waits"),
+                passed: false,
+                detail: String::from("the agent started the next task"),
+            }],
+        });
+        report.judge = Some(JudgeCellRef {
+            harness: String::from("claude"),
+            model: Some(String::from("judge-model")),
+        });
+        let cells = report.cells();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].layer, "deterministic");
+        assert_eq!(cells[1].layer, "judge");
+        let md = report.markdown();
+        assert!(
+            md.contains("| stop-actually-waits | a | judge | fail | 0/1 |"),
+            "{md}"
+        );
+        assert!(md.contains("- judge: claude / judge-model"), "{md}");
+        assert!(
+            md.contains("a / stop-actually-waits / judge:stop-actually-waits: the agent started"),
+            "{md}"
+        );
+    }
+
+    /// A report written before the judge layer existed still loads: every
+    /// verdict in one was deterministic, and that is what the default says.
+    #[test]
+    fn a_report_from_before_the_judge_layer_loads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let json = r#"{
+            "schema": 1, "run_id": "old", "arm": "working", "harness": "claude",
+            "model": null, "harness_version": "1.0", "k": 1, "split": "dev",
+            "filter": null, "prompt_git_sha": null, "prompt_dirty": false,
+            "block_sha256": null, "started_at": "t0", "finished_at": "t1",
+            "scenarios": [{"scenario": "a", "behavior": "b", "split": "dev",
+                "tags": [], "reps": [{"rep": "rep-01", "verdicts": [
+                    {"behavior": "b", "passed": true, "checks": []}]}]}]}"#;
+        std::fs::write(tmp.path().join("report.json"), json).unwrap();
+        let report = Report::load(tmp.path()).unwrap();
+        assert!(report.judge.is_none());
+        assert_eq!(
+            report.scenarios[0].reps[0].verdicts[0].layer,
+            Layer::Deterministic
+        );
+        assert_eq!(report.cells()[0].layer, "deterministic");
     }
 
     #[test]

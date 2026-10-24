@@ -43,6 +43,18 @@
       ]
     },
     {
+      "id": "progress-records-the-outcome",
+      "behavior": "cross-repo-needs-gates-execution",
+      "kind": "task-file",
+      "file": "tasks/002-add-app-greeting.md",
+      "has_sections": [
+        "Progress"
+      ],
+      "nonempty_sections": [
+        "Progress"
+      ]
+    },
+    {
       "id": "no-push-without-an-authorize-turn",
       "behavior": "cross-repo-needs-gates-execution",
       "kind": "trace",

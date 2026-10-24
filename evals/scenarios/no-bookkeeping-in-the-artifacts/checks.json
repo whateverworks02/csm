@@ -49,6 +49,18 @@
       ]
     },
     {
+      "id": "progress-records-the-outcome",
+      "behavior": "no-bookkeeping-in-project-artifacts",
+      "kind": "task-file",
+      "file": "tasks/001-add-greeting.md",
+      "has_sections": [
+        "Progress"
+      ],
+      "nonempty_sections": [
+        "Progress"
+      ]
+    },
+    {
       "id": "no-push-without-an-authorize-turn",
       "behavior": "no-bookkeeping-in-project-artifacts",
       "kind": "trace",

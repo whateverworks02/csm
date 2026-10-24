@@ -7,14 +7,16 @@
 //! the scenario; the headline number is a delta between contrast arms, never
 //! an absolute score.
 //!
-//! Three subcommands: `run` drives the scripted turns (model calls), `grade`
-//! re-applies the checks to what a run recorded (no model calls), and `diff`
+//! Four subcommands: `run` drives the scripted turns (model calls) and judges
+//! them, `judge` re-judges a recorded run (model calls, no turns), `grade`
+//! re-applies both layers to what a run recorded (no model calls), and `diff`
 //! turns two runs' adherence matrices into the delta the deploy loop gates on.
 
 mod arms;
 mod artifacts;
 mod checks;
 mod driver;
+mod judge;
 mod report;
 mod sandbox;
 mod scenario;
@@ -24,7 +26,8 @@ use artifacts::RunDir;
 use checks::{ChecksFile, RepDir};
 use clap::{Parser, Subcommand};
 use driver::driver_for;
-use report::{GradedRep, GradedScenario, Report};
+use judge::JudgeCell;
+use report::{BehaviorGrade, GradedRep, GradedScenario, JudgeCellRef, Report};
 use scenario::{Arm, Harness, Scenario, SplitSelect};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -76,7 +79,7 @@ enum Cmd {
         /// Only scenarios carrying this tag.
         #[arg(long)]
         filter: Option<String>,
-        /// Per-turn wall-clock cap in seconds.
+        /// Per-turn wall-clock cap in seconds; also caps one judge call.
         #[arg(long, default_value_t = 900)]
         timeout_secs: u64,
         /// Keep the sandbox for inspection after the run.
@@ -89,12 +92,39 @@ enum Cmd {
         /// assertion still runs).
         #[arg(long)]
         no_seatbelt: bool,
+        /// Skip the judge layer: grade the deterministic checks only.
+        #[arg(long)]
+        no_judge: bool,
+        /// Harness that runs the judge (defaults to the harness under test).
+        #[arg(long)]
+        judge_harness: Option<String>,
+        /// Model that judges; without it the judge harness's default applies.
+        #[arg(long)]
+        judge_model: Option<String>,
     },
-    /// Re-apply the checks to a run's recorded traces and snapshots and write
-    /// its report. Zero model calls.
+    /// Re-apply both layers to a run's recorded traces and snapshots and write
+    /// its report. Zero model calls: the judge verdicts are the ones the run
+    /// recorded.
     Grade {
         /// A run dir (grading every rep inside it) or one rep dir.
         run_dir: PathBuf,
+        /// Repo root (defaults to walking up from the cwd).
+        #[arg(long)]
+        repo_root: Option<PathBuf>,
+    },
+    /// Judge a recorded run: one call per scenario x rep, no turns re-run.
+    Judge {
+        /// A run dir (judging every rep inside it) or one rep dir.
+        run_dir: PathBuf,
+        /// Harness that runs the judge (defaults to the run's own).
+        #[arg(long)]
+        judge_harness: Option<String>,
+        /// Model that judges; without it the judge harness's default applies.
+        #[arg(long)]
+        judge_model: Option<String>,
+        /// Wall-clock cap per judge call, in seconds.
+        #[arg(long, default_value_t = 900)]
+        timeout_secs: u64,
         /// Repo root (defaults to walking up from the cwd).
         #[arg(long)]
         repo_root: Option<PathBuf>,
@@ -130,11 +160,22 @@ fn try_main() -> Result<()> {
             keep_sandbox,
             repo_root,
             no_seatbelt,
+            no_judge,
+            judge_harness,
+            judge_model,
         } => {
+            let harness = Harness::parse(&harness)?;
+            let judge = judge_cell(
+                !no_judge,
+                judge_harness.as_deref(),
+                judge_model,
+                harness,
+                Duration::from_secs(timeout_secs),
+            )?;
             let code = cmd_run(&RunOpts {
                 scenario: scenario.as_deref(),
                 arm: Arm::parse(&arm)?,
-                harness: Harness::parse(&harness)?,
+                harness,
                 model: model.as_deref(),
                 k,
                 split: SplitSelect::parse(&split)?,
@@ -143,6 +184,7 @@ fn try_main() -> Result<()> {
                 keep_sandbox,
                 repo_root: repo_root.as_deref(),
                 seatbelt: !no_seatbelt,
+                judge,
             })?;
             if code != 0 {
                 std::process::exit(code);
@@ -152,6 +194,25 @@ fn try_main() -> Result<()> {
         Cmd::Grade { run_dir, repo_root } => {
             let repo_root = resolve_repo_root(repo_root.as_deref())?;
             cmd_grade(&run_dir, &repo_root)?;
+            Ok(())
+        }
+        Cmd::Judge {
+            run_dir,
+            judge_harness,
+            judge_model,
+            timeout_secs,
+            repo_root,
+        } => {
+            let repo_root = resolve_repo_root(repo_root.as_deref())?;
+            let cell = judge_cell(
+                true,
+                judge_harness.as_deref(),
+                judge_model,
+                harness_of_run(&run_dir)?,
+                Duration::from_secs(timeout_secs),
+            )?
+            .expect("judging is on");
+            cmd_judge(&run_dir, &repo_root, &cell)?;
             Ok(())
         }
         Cmd::Diff {
@@ -182,6 +243,47 @@ struct RunOpts<'a> {
     keep_sandbox: bool,
     repo_root: Option<&'a Path>,
     seatbelt: bool,
+    /// The judge layer's cell, or `None` under `--no-judge`.
+    judge: Option<JudgeCell>,
+}
+
+/// The judge cell, or `None` when judging is off. The judge runs on the
+/// harness under test unless one is named: it is the same local CLI either way.
+fn judge_cell(
+    enabled: bool,
+    harness: Option<&str>,
+    model: Option<String>,
+    default_harness: Harness,
+    timeout: Duration,
+) -> Result<Option<JudgeCell>> {
+    if !enabled {
+        if harness.is_some() || model.is_some() {
+            bail!("--judge-harness/--judge-model cannot be combined with --no-judge");
+        }
+        return Ok(None);
+    }
+    Ok(Some(JudgeCell {
+        harness: match harness {
+            Some(id) => Harness::parse(id)?,
+            None => default_harness,
+        },
+        model,
+        timeout,
+    }))
+}
+
+/// The harness a recorded run was driven with, from its manifest.
+fn harness_of_run(run_dir: &Path) -> Result<Harness> {
+    let path = run_dir.join("manifest.json");
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let id = manifest
+        .get("harness")
+        .and_then(|h| h.as_str())
+        .with_context(|| format!("{} names no harness", path.display()))?;
+    Harness::parse(id)
 }
 
 /// Walk up from `start` to find the csm repo root (Cargo.toml + src/prompt.rs).
@@ -309,13 +411,17 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
         opts.filter.unwrap_or("(none)")
     ));
 
-    let mut graded = Vec::new();
+    // Every check set loads before the first model call: a corpus that cannot
+    // be graded should fail before it has spent anything.
+    let checks: Vec<ChecksFile> = selected
+        .iter()
+        .map(|(name, _)| ChecksFile::load(&Scenario::checks_path(&scenarios_dir.join(name))))
+        .collect::<Result<_>>()?;
+
+    let mut recorded: Vec<RecordedRep> = Vec::new();
     let mut model_seen: Option<String> = None;
     let mut status = String::from("ok");
-    for (name, scenario) in &selected {
-        let checks_path = Scenario::checks_path(&scenarios_dir.join(name));
-        let checks_file = ChecksFile::load(&checks_path)?;
-        let mut reps = Vec::new();
+    for (scenario_index, (name, scenario)) in selected.iter().enumerate() {
         for index in 1..=opts.k {
             let rep_name = format!("rep-{index:02}");
             println!("{name} / {rep_name} ({} turns)", scenario.script.len());
@@ -333,15 +439,53 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
             if outcome.status != "ok" && status == "ok" {
                 status = outcome.status.clone();
             }
-            let verdicts = report::grade_rep(&checks_file, &outcome.rep_dir);
+            recorded.push(RecordedRep {
+                scenario_index,
+                rep_name,
+                outcome,
+            });
+        }
+    }
+
+    let hermetic_pass = artifacts::assert_hermeticity(&run, &watch, before)?;
+
+    // Grading and judging come after the hermeticity window closes. The
+    // deterministic layer only reads recorded artifacts, but a judge call runs
+    // the harness in the operator's own environment - the one thing that
+    // window exists to keep the run out of.
+    let mut graded = Vec::new();
+    // The model the judge actually resolved to, for the report's own record.
+    let mut judge_model: Option<String> = None;
+    for (scenario_index, (_, scenario)) in selected.iter().enumerate() {
+        let checks_file = &checks[scenario_index];
+        let mut reps = Vec::new();
+        for rep in recorded
+            .iter()
+            .filter(|r| r.scenario_index == scenario_index)
+        {
+            let mut verdicts = report::grade_rep(checks_file, &rep.outcome.rep_dir);
+            if let Some(cell) = &opts.judge {
+                if let Some(record) = judge_one_rep(
+                    cell,
+                    scenario,
+                    &verdicts,
+                    &rep.outcome.rep_dir,
+                    rep.outcome.block.as_deref(),
+                    &run,
+                )? {
+                    judge_model = judge_model.or(record.model.clone());
+                    verdicts.extend(record.grades());
+                }
+            }
             let failed: Vec<&str> = verdicts
                 .iter()
                 .filter(|v| !v.passed)
                 .map(|v| v.behavior.as_str())
                 .collect();
             println!(
-                "  -> {}{}",
-                outcome.status,
+                "  {} -> {}{}",
+                rep.rep_name,
+                rep.outcome.status,
                 if failed.is_empty() {
                     String::from("; all behaviors pass")
                 } else {
@@ -349,7 +493,7 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
                 }
             );
             reps.push(GradedRep {
-                rep: rep_name.clone(),
+                rep: rep.rep_name.clone(),
                 verdicts,
             });
         }
@@ -362,7 +506,6 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
         });
     }
 
-    let hermetic_pass = artifacts::assert_hermeticity(&run, &watch, before)?;
     let finished_at = chrono::Local::now().to_rfc3339();
     let report = Report {
         schema: report::SCHEMA,
@@ -371,6 +514,10 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
         harness: opts.harness.id().to_string(),
         model: model_seen,
         harness_version: info.harness_version.clone(),
+        judge: opts.judge.as_ref().map(|c| JudgeCellRef {
+            harness: c.harness.id().to_string(),
+            model: judge_model.clone().or_else(|| c.model.clone()),
+        }),
         k: opts.k,
         split: opts.split.id().to_string(),
         filter: opts.filter.map(str::to_string),
@@ -402,6 +549,7 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
         "prompt_git_sha": &report.prompt_git_sha,
         "prompt_dirty": info.git_dirty,
         "block_sha256": &report.block_sha256,
+        "judge": &report.judge,
         "started_at": &info.started_at,
         "finished_at": finished_at,
         "status": &status,
@@ -423,6 +571,63 @@ fn cmd_run(opts: &RunOpts) -> Result<i32> {
     } else {
         0
     })
+}
+
+/// Judge one rep and report what happened, on stdout and in the run log. The
+/// caller takes the verdicts as grades; a rep whose answer never parsed
+/// contributes none, so its judged behaviors carry no verdict rather than a
+/// fabricated one. `None` means the scenario declared no dimension to judge.
+fn judge_one_rep(
+    cell: &JudgeCell,
+    scenario: &Scenario,
+    grades: &[BehaviorGrade],
+    rep_dir: &RepDir,
+    block: Option<&str>,
+    run: &RunDir,
+) -> Result<Option<judge::JudgeRecord>> {
+    if judge::declared(scenario).is_empty() {
+        run.log(&format!(
+            "{}: no judge dimensions declared; the deterministic layer alone grades it",
+            scenario.name
+        ));
+        return Ok(None);
+    }
+    let record = judge::judge_rep(cell, scenario, grades, rep_dir, block)?;
+    let failed: Vec<&str> = record
+        .verdicts
+        .iter()
+        .filter(|v| !v.passed)
+        .map(|v| v.dimension.as_str())
+        .collect();
+    println!(
+        "  judge: {}{}",
+        record.status,
+        if record.status == "ok" {
+            if failed.is_empty() {
+                String::from("; all dimensions pass")
+            } else {
+                format!("; failed: {}", failed.join(", "))
+            }
+        } else {
+            match record.attempts.last().and_then(|a| a.error.as_deref()) {
+                Some(e) => format!("; {e}"),
+                None => String::new(),
+            }
+        }
+    );
+    run.log(&format!(
+        "{} {}: judge {} ({} attempt(s), {} dimension(s))",
+        scenario.name,
+        rep_dir
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        record.status,
+        record.attempts.len(),
+        record.dimensions.len()
+    ));
+    Ok(Some(record))
 }
 
 /// The run-level facts every rep shares and that no rep can change: resolved
@@ -452,11 +657,24 @@ struct RepCtx<'a> {
     rep_name: &'a str,
 }
 
+/// One rep held back until the run's hermeticity window has closed: grading
+/// and judging both happen after it, and the judge calls a model in the
+/// operator's own environment.
+struct RecordedRep {
+    /// Which entry of the selected scenarios this rep belongs to.
+    scenario_index: usize,
+    rep_name: String,
+    outcome: RepOutcome,
+}
+
 /// One rep's outcome, as much as the suite needs from it.
 struct RepOutcome {
     status: String,
     model: Option<String>,
     rep_dir: RepDir,
+    /// The block this rep deployed, verbatim - the judge's copy of the prompt
+    /// under test.
+    block: Option<String>,
 }
 
 /// Drive one repeat of one scenario: a fresh sandbox, the arm deployed, the
@@ -500,6 +718,9 @@ fn run_one_rep(ctx: &RepCtx) -> Result<RepOutcome> {
             return Err(e.context("deploy check failed"));
         }
     };
+    // Read after the check, so the text recorded is the block that was
+    // verified rather than whatever happens to be on disk.
+    let block = sandbox::deployed_block(&sb)?;
     run.log(&format!(
         "deployed arm {} (deployed block sha256: {}; block ref: {})",
         ctx.opts.arm.id(),
@@ -552,6 +773,7 @@ fn run_one_rep(ctx: &RepCtx) -> Result<RepOutcome> {
         let result = driver::run_turn(
             cmd,
             ctx.opts.timeout,
+            None,
             &run.turn_trace(index),
             &run.turn_stderr(index),
         )?;
@@ -629,6 +851,9 @@ fn run_one_rep(ctx: &RepCtx) -> Result<RepOutcome> {
         "prompt_git_sha": &ctx.info.git_sha,
         "prompt_dirty": ctx.info.git_dirty,
         "block_sha256": &ctx.info.block_ref,
+        // The deployed block verbatim: a hash identifies the prompt under test,
+        // only its text can be judged against.
+        "block_text": &block,
         "auto_mode": {
             "permissions": "bypassed",
             "keep_going_system_instruction": driver::AUTO_MODE_PROMPT,
@@ -651,13 +876,25 @@ fn run_one_rep(ctx: &RepCtx) -> Result<RepOutcome> {
         status: status.to_string(),
         model: observed_model,
         rep_dir,
+        block,
     })
 }
 
 // --- grade -------------------------------------------------------------------
 
-/// Re-apply the checks to what a run recorded. Accepts a run dir (grading
-/// every rep under `reps/`) or a single rep dir.
+/// A rep's grades from what is already on disk: the deterministic checks,
+/// re-applied, plus whatever judge verdicts the rep recorded. Both layers come
+/// back through here, so `grade` and `judge` cannot disagree about a rep.
+fn recorded_grades(checks_file: &ChecksFile, rep_dir: &Path) -> Result<Vec<BehaviorGrade>> {
+    let mut grades = report::grade_rep(checks_file, &RepDir::new(rep_dir));
+    if let Some(record) = judge::load(rep_dir)? {
+        grades.extend(record.grades());
+    }
+    Ok(grades)
+}
+
+/// Re-apply the layers to what a run recorded. Accepts a run dir (grading
+/// every rep under `reps/`) or a single rep dir. Zero model calls.
 fn cmd_grade(run_dir: &Path, repo_root: &Path) -> Result<()> {
     let scenarios_dir = repo_root.join("evals").join("scenarios");
     if run_dir.join("reps").is_dir() {
@@ -668,13 +905,12 @@ fn cmd_grade(run_dir: &Path, repo_root: &Path) -> Result<()> {
             let scenario_root = run_dir.join("reps").join(&scenario.scenario);
             let mut reps = Vec::new();
             for entry in sorted_dirs(&scenario_root)? {
-                let rep_dir = RepDir::new(&entry);
                 reps.push(GradedRep {
                     rep: entry
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default(),
-                    verdicts: report::grade_rep(&checks_file, &rep_dir),
+                    verdicts: recorded_grades(&checks_file, &entry)?,
                 });
             }
             scenario.reps = reps;
@@ -686,19 +922,7 @@ fn cmd_grade(run_dir: &Path, repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // A single rep dir: its own manifest names the scenario.
-    let manifest_path = run_dir.join("manifest.json");
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&manifest_path)
-            .with_context(|| format!("reading {}", manifest_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", manifest_path.display()))?;
-    let name = manifest
-        .get("scenario")
-        .and_then(|s| s.as_str())
-        .context("the rep manifest names no scenario")?;
-    let checks_file = ChecksFile::load(&Scenario::checks_path(&scenarios_dir.join(name)))?;
-    let grades = report::grade_rep(&checks_file, &RepDir::new(run_dir));
+    let (name, grades) = grade_one_rep(run_dir, &scenarios_dir)?;
     let passed = grades.iter().filter(|g| g.passed).count();
     std::fs::write(
         run_dir.join("grade.json"),
@@ -713,6 +937,146 @@ fn cmd_grade(run_dir: &Path, repo_root: &Path) -> Result<()> {
         run_dir.display(),
         grades.len()
     );
+    Ok(())
+}
+
+/// One rep dir's grades; its own manifest names the scenario.
+fn grade_one_rep(rep_dir: &Path, scenarios_dir: &Path) -> Result<(String, Vec<BehaviorGrade>)> {
+    let manifest = rep_manifest(rep_dir)?;
+    let name = manifest
+        .get("scenario")
+        .and_then(|s| s.as_str())
+        .context("the rep manifest names no scenario")?
+        .to_string();
+    let checks_file = ChecksFile::load(&Scenario::checks_path(&scenarios_dir.join(&name)))?;
+    Ok((name, recorded_grades(&checks_file, rep_dir)?))
+}
+
+fn rep_manifest(rep_dir: &Path) -> Result<serde_json::Value> {
+    let path = rep_dir.join("manifest.json");
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+// --- judge -------------------------------------------------------------------
+
+/// The block a rep deployed, from its manifest. Judging a run against a block it
+/// did not deploy would measure the wrong protocol, so an arm that deployed one
+/// and did not record it is an error rather than a silent "no block deployed".
+fn rep_block(manifest: &serde_json::Value, rep_dir: &Path) -> Result<Option<String>> {
+    let arm = manifest
+        .get("arm")
+        .and_then(|a| a.as_str())
+        .unwrap_or_default();
+    let block = manifest
+        .get("block_text")
+        .and_then(|b| b.as_str())
+        .map(String::from);
+    anyhow::ensure!(
+        block.is_some() || arm == Arm::NoBlock.id(),
+        "{} records no block text (arm {arm}); the judge needs the exact prompt under test, so \
+         re-run the arm",
+        rep_dir.display()
+    );
+    Ok(block)
+}
+
+/// Judge a recorded run: one call per scenario x rep over the traces and
+/// snapshots it recorded, then rewrite the report with the judge verdicts
+/// merged in. Accepts a run dir or one rep dir; no turn is re-run either way.
+fn cmd_judge(run_dir: &Path, repo_root: &Path, cell: &JudgeCell) -> Result<()> {
+    let scenarios_dir = repo_root.join("evals").join("scenarios");
+    if !run_dir.join("reps").is_dir() {
+        return cmd_judge_rep(run_dir, &scenarios_dir, cell);
+    }
+    let mut report = Report::load(run_dir)?;
+    report.judge = Some(JudgeCellRef {
+        harness: cell.harness.id().to_string(),
+        model: cell.model.clone(),
+    });
+    let mut judge_model: Option<String> = None;
+    for scenario_report in report.scenarios.iter_mut() {
+        let dir = scenarios_dir.join(&scenario_report.scenario);
+        let scenario = Scenario::load(&dir)?;
+        let checks_file = ChecksFile::load(&Scenario::checks_path(&dir))?;
+        let scenario_root = run_dir.join("reps").join(&scenario_report.scenario);
+        let mut reps = Vec::new();
+        for entry in sorted_dirs(&scenario_root)? {
+            let rep = RepDir::new(&entry);
+            let rep_name = entry
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let mut verdicts = report::grade_rep(&checks_file, &rep);
+            let block = rep_block(&rep_manifest(&entry)?, &entry)?;
+            println!("{} / {rep_name}: judging", scenario.name);
+            if let Some(record) = judge_one_rep(
+                cell,
+                &scenario,
+                &verdicts,
+                &rep,
+                block.as_deref(),
+                &RunDir {
+                    path: run_dir.to_path_buf(),
+                },
+            )? {
+                judge_model = judge_model.or(record.model.clone());
+                verdicts.extend(record.grades());
+            }
+            reps.push(GradedRep {
+                rep: rep_name,
+                verdicts,
+            });
+        }
+        scenario_report.reps = reps;
+    }
+    if let Some(cell_ref) = report.judge.as_mut() {
+        cell_ref.model = judge_model.or_else(|| cell_ref.model.take());
+    }
+    report.write(run_dir)?;
+    let (passed, total) = report.adherent();
+    println!("judged {}: {passed}/{total} behaviors", report.run_id);
+    println!("report: {}", run_dir.join("report.md").display());
+    Ok(())
+}
+
+/// Judge one rep dir. There is no run report to rewrite, so the pass lands in
+/// the rep's own `judge.json` for the next `grade` to pick up.
+fn cmd_judge_rep(rep_dir: &Path, scenarios_dir: &Path, cell: &JudgeCell) -> Result<()> {
+    let manifest = rep_manifest(rep_dir)?;
+    let name = manifest
+        .get("scenario")
+        .and_then(|s| s.as_str())
+        .context("the rep manifest names no scenario")?
+        .to_string();
+    let dir = scenarios_dir.join(&name);
+    let scenario = Scenario::load(&dir)?;
+    let checks_file = ChecksFile::load(&Scenario::checks_path(&dir))?;
+    let rep = RepDir::new(rep_dir);
+    let block = rep_block(&manifest, rep_dir)?;
+    let grades = report::grade_rep(&checks_file, &rep);
+    let record = judge_one_rep(
+        cell,
+        &scenario,
+        &grades,
+        &rep,
+        block.as_deref(),
+        &RunDir {
+            path: rep_dir.to_path_buf(),
+        },
+    )?;
+    match record {
+        Some(record) => println!(
+            "judged {name} in {}: {} dimension(s)",
+            rep_dir.display(),
+            record.dimensions.len()
+        ),
+        None => println!(
+            "{name} declares no judge dimension; {} is graded by the deterministic layer alone",
+            rep_dir.display()
+        ),
+    }
     Ok(())
 }
 
@@ -736,4 +1100,65 @@ fn cmd_diff(baseline: &Path, candidate: &Path) -> Result<(String, bool)> {
     let b = Report::load(candidate)?;
     let deltas = report::diff(&a, &b);
     Ok(report::render_diff(&a, &b, &deltas))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_judge_cell_defaults_to_the_harness_under_test() {
+        let cell = judge_cell(true, None, None, Harness::Codex, Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cell.harness, Harness::Codex);
+        assert_eq!(cell.model, None);
+        assert_eq!(cell.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn the_judge_cell_takes_a_named_harness_and_model() {
+        let cell = judge_cell(
+            true,
+            Some("claude"),
+            Some(String::from("judge-model")),
+            Harness::Codex,
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(cell.harness, Harness::Claude);
+        assert_eq!(cell.model.as_deref(), Some("judge-model"));
+        assert!(judge_cell(
+            true,
+            Some("pi"),
+            None,
+            Harness::Claude,
+            Duration::from_secs(5)
+        )
+        .is_err());
+    }
+
+    /// `--no-judge` skips the layer, and asking for a judge cell it would
+    /// ignore is a contradiction rather than a silently dropped flag.
+    #[test]
+    fn no_judge_skips_the_layer_and_refuses_a_judge_cell() {
+        assert!(
+            judge_cell(false, None, None, Harness::Claude, Duration::from_secs(5))
+                .unwrap()
+                .is_none()
+        );
+        for (harness, model) in [(Some("claude"), None), (None, Some(String::from("m")))] {
+            let err = judge_cell(
+                false,
+                harness,
+                model,
+                Harness::Claude,
+                Duration::from_secs(5),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("--no-judge"), "{err}");
+        }
+    }
 }
