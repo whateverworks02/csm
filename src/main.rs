@@ -44,14 +44,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// List all sessions.
-    List,
+    /// List active sessions (`--archived`: the archived ones).
+    List {
+        /// List archived sessions instead of active ones.
+        #[arg(long)]
+        archived: bool,
+    },
 
     /// Pin a session so it is never garbage-collected.
     Pin { name: String },
 
     /// Unpin a session.
     Unpin { name: String },
+
+    /// Archive a session: retained on disk, out of the daily surfaces and gc.
+    Archive { name: String },
+
+    /// Unarchive a session, returning it to the active surfaces.
+    Unarchive { name: String },
 
     /// Hard-delete a session (workspace dir + index entry).
     #[command(aliases = ["remove", "delete", "del"])]
@@ -135,7 +145,7 @@ fn try_main() -> Result<()> {
                 None => cmd_pick_here(&agent),
             }
         }
-        Some(Cmd::List) => cmd_list(),
+        Some(Cmd::List { archived }) => cmd_list(archived),
         Some(Cmd::Pin { name }) => {
             store::set_pinned(&name, true)?;
             ui::done("pinned", &name);
@@ -146,6 +156,8 @@ fn try_main() -> Result<()> {
             ui::done("unpinned", &name);
             Ok(())
         }
+        Some(Cmd::Archive { name }) => cmd_set_archived(&name, true),
+        Some(Cmd::Unarchive { name }) => cmd_set_archived(&name, false),
         Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
         Some(Cmd::Rename { old, new }) => cmd_rename(&old, &new),
         Some(Cmd::Show { name }) => cmd_show(name),
@@ -161,6 +173,23 @@ fn try_main() -> Result<()> {
     }
 }
 
+/// `csm archive <name>` / `csm unarchive <name>`: flip the archive state,
+/// reporting whether this call changed it. Archiving is reversible and leaves
+/// the workspace in place, so neither asks for confirmation.
+fn cmd_set_archived(name: &str, archived: bool) -> Result<()> {
+    let (verb, state) = if archived {
+        ("archived", "already archived")
+    } else {
+        ("unarchived", "already active")
+    };
+    if store::set_archived(name, archived)? {
+        ui::done(verb, name);
+    } else {
+        eprintln!("{}", ui::epaint(ui::DIM, &format!("{state}: {name}")));
+    }
+    Ok(())
+}
+
 fn cmd_start(name: &str, agent: &str) -> Result<()> {
     // Resolve the agent adapter first so an unknown agent id errors before we
     // create or touch any session.
@@ -169,7 +198,11 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let origin_pwd = cwd.display().to_string();
 
-    let meta = store::touch_session(name, &origin_pwd)?;
+    let (meta, revived) = store::touch_session_reviving(name, &origin_pwd)?;
+    if revived {
+        // Naming an archived session is an explicit request to work on it.
+        ui::done("unarchived", name);
+    }
     workspace::ensure_workspace(name, &meta)?;
 
     let dir = store::session_dir(name)?;
@@ -277,7 +310,7 @@ fn cmd_pick_here(agent: &str) -> Result<()> {
     let rows: Vec<(String, store::SessionMeta)> = idx
         .sessions
         .iter()
-        .filter(|(_, m)| m.origin_pwd == cwd_str)
+        .filter(|(_, m)| m.origin_pwd == cwd_str && !m.is_archived())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if rows.is_empty() {
@@ -292,6 +325,14 @@ fn cmd_pick_here(agent: &str) -> Result<()> {
             format!("csm <name> -a {agent}")
         };
         ui::hint(&format!("start one with: {start}"));
+        // The cwd does have sessions - they are all archived.
+        if idx
+            .sessions
+            .values()
+            .any(|m| m.origin_pwd == cwd_str && m.is_archived())
+        {
+            ui::hint("csm list --archived");
+        }
         return Ok(());
     }
     let Some(name) = pick_session(&format!("sessions for {}", ui::abbrev_home(&cwd_str)), rows)?
@@ -357,8 +398,8 @@ fn pick_session(
     }
 }
 
-/// Picker over all sessions. Prints a hint and returns `None` if there are no
-/// sessions or the user aborted.
+/// Picker over all active sessions. Prints a hint and returns `None` if there
+/// are no sessions, every session is archived, or the user aborted.
 fn pick_session_all() -> Result<Option<String>> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
@@ -368,8 +409,13 @@ fn pick_session_all() -> Result<Option<String>> {
     let rows: Vec<(String, store::SessionMeta)> = idx
         .sessions
         .iter()
+        .filter(|(_, m)| !m.is_archived())
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    if rows.is_empty() {
+        ui::no_active_sessions_hint();
+        return Ok(None);
+    }
     pick_session("all sessions", rows)
 }
 
@@ -388,23 +434,54 @@ fn resolve_session_name(name: Option<String>) -> Result<Option<String>> {
     }
 }
 
-fn cmd_list() -> Result<()> {
+/// The stamp a `csm list` row shows, and the sort key for its mode:
+/// `archived_at` in the archived listing, `last_access` in the active one.
+/// One rule for both, so the order always matches the visible column.
+fn shown_stamp(meta: &store::SessionMeta, archived: bool) -> &str {
+    if archived {
+        meta.archived_at.as_deref().unwrap_or("")
+    } else {
+        &meta.last_access
+    }
+}
+
+/// The rows `csm list` shows: active sessions by default, archived ones with
+/// `archived`, each most-recent-first on the timestamp its column displays.
+fn list_rows(idx: &store::Index, archived: bool) -> Vec<(&String, &store::SessionMeta)> {
+    let mut rows: Vec<_> = idx
+        .sessions
+        .iter()
+        .filter(|(_, m)| m.is_archived() == archived)
+        .collect();
+    rows.sort_by(|a, b| shown_stamp(b.1, archived).cmp(shown_stamp(a.1, archived)));
+    rows
+}
+
+fn cmd_list(archived: bool) -> Result<()> {
     let idx = store::load_index()?;
-    if idx.sessions.is_empty() {
+    if idx.sessions.is_empty() && !archived {
         ui::no_sessions_hint();
         return Ok(());
     }
-    let mut rows: Vec<_> = idx.sessions.iter().collect();
-    rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
+    let rows = list_rows(&idx, archived);
+    if rows.is_empty() {
+        if archived {
+            eprintln!("{}", ui::epaint(ui::DIM, "no archived sessions."));
+        } else {
+            ui::no_active_sessions_hint();
+        }
+        return Ok(());
+    }
+    let header = if archived { "ARCHIVED" } else { "LAST ACCESS" };
     println!(
         "{}  {}  {}  {}",
         ui::paint(ui::DIM, &format!("{:<20}", "NAME")),
         ui::paint(ui::DIM, &format!("{:<4}", "PIN")),
-        ui::paint(ui::DIM, &format!("{:<19}", "LAST ACCESS")),
+        ui::paint(ui::DIM, &format!("{:<19}", header)),
         ui::paint(ui::DIM, "ORIGIN"),
     );
     for (name, m) in rows {
-        let last = store::format_ts(&m.last_access);
+        let last = store::format_ts(shown_stamp(m, archived));
         let pin_field = if m.pinned { ui::PIN_MARK } else { "" };
         println!(
             "{}  {}  {}  {}",
@@ -540,6 +617,9 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         ui::paint(ui::DIM, pinned_str)
     };
     card_row("pinned", &pinned_styled);
+    if let Some(ts) = &meta.archived_at {
+        card_row("archived", &ui::paint(ui::DIM, &store::format_ts(ts)));
+    }
 
     // context - first paragraph of the Context section; the recognizer. (Falls
     // back to a legacy `## Task` section for pre-tasks-model sessions.)
@@ -844,6 +924,70 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown agent"), "{err}");
+    }
+
+    // --- archive surfaces ---
+
+    #[test]
+    fn cli_parses_list_archive_and_unarchive() {
+        match Cli::parse_from(["csm", "list"]).command {
+            Some(Cmd::List { archived }) => assert!(!archived),
+            _ => panic!("expected list"),
+        }
+        match Cli::parse_from(["csm", "list", "--archived"]).command {
+            Some(Cmd::List { archived }) => assert!(archived),
+            _ => panic!("expected list --archived"),
+        }
+        match Cli::parse_from(["csm", "archive", "api"]).command {
+            Some(Cmd::Archive { name }) => assert_eq!(name, "api"),
+            _ => panic!("expected archive"),
+        }
+        match Cli::parse_from(["csm", "unarchive", "api"]).command {
+            Some(Cmd::Unarchive { name }) => assert_eq!(name, "api"),
+            _ => panic!("expected unarchive"),
+        }
+    }
+
+    fn meta(origin: &str, last_access: &str, archived_at: Option<&str>) -> store::SessionMeta {
+        store::SessionMeta {
+            origin_pwd: origin.into(),
+            created_at: last_access.into(),
+            last_access: last_access.into(),
+            pinned: false,
+            archived_at: archived_at.map(Into::into),
+        }
+    }
+
+    /// `csm list` shows one state at a time, ordered by the stamp its column
+    /// displays - `last_access` for active, `archived_at` for archived.
+    #[test]
+    fn list_rows_filters_by_archive_and_sorts_by_shown_stamp() {
+        let mut idx = store::Index::default();
+        for (name, last_access, archived_at) in [
+            ("active-old", "2026-10-01T00:00:00+00:00", None),
+            ("active-new", "2026-10-03T00:00:00+00:00", None),
+            (
+                "archived-old",
+                "2026-10-02T00:00:00+00:00",
+                Some("2026-10-05T00:00:00+00:00"),
+            ),
+            (
+                "archived-new",
+                "2026-10-04T00:00:00+00:00",
+                Some("2026-10-06T00:00:00+00:00"),
+            ),
+        ] {
+            idx.sessions
+                .insert(name.into(), meta("/o", last_access, archived_at));
+        }
+        let names = |archived: bool| -> Vec<String> {
+            list_rows(&idx, archived)
+                .into_iter()
+                .map(|(n, _)| n.clone())
+                .collect()
+        };
+        assert_eq!(names(false), vec!["active-new", "active-old"]);
+        assert_eq!(names(true), vec!["archived-new", "archived-old"]);
     }
 
     // --- tasks block: summary bar, sections, done lines (color is off under
