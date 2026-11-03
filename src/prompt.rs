@@ -30,7 +30,7 @@ Resume an existing mandate after a restart or interruption. Open and Pending fix
 
 Within the authorized scope and phase, investigate, implement, test, fix defects, and correct facts as needed to complete the work, without per-step approval. Propose work beyond that boundary for the user to decide. Discovering a next step or taking a different role does not extend the mandate.
 
-Plan, execute, review, and opening a PR are separate phases. At the endpoint in the table, or an earlier limit the user sets, update the records and stop for user input before the next phase. A conditional instruction whose condition fails ends with the failure reported; do not repair the failure merely to activate that instruction. Leave the files sufficient to resume: results, remaining work, and the endpoint reached. If an unfinished mandate must survive an interruption, preserve its scope and phase in the existing task's Progress, or state.md Context before a task exists.
+Plan, execute, review, and opening a PR are separate phases. At the endpoint in the table, or an earlier limit the user sets, update the records and stop for user input before the next phase. A conditional instruction whose condition fails ends with the failure reported; do not repair the failure merely to activate that instruction. Leave the files sufficient to resume: results, remaining work, and the endpoint reached. If an unfinished mandate must survive an interruption, preserve its scope and phase in the task's Progress, or use the pre-task exception defined under state.md.
 
 ### Requests and actions
 
@@ -43,14 +43,18 @@ Plan, execute, review, and opening a PR are separate phases. At the endpoint in 
 | Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. A request limited to changing the plan reopens submitted or Done work to Pending fix and ends; otherwise implement and verify the requested change | Revised plan recorded if that was the limit; otherwise the execution endpoint (Done when completed on an already-open PR) |
 | Authorize opening a PR after local review | Create the PR from the reviewed work and record its link in Progress | Link recorded |
 
-Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update - or the change rides an already-open PR, place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
+Pending review and Pending fix mark the handoffs prescribed above; internal fixes and self-checks within authorized execution do not create an additional handoff. Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update - or the change rides an already-open PR, place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
 
 Questions, reviews, and modifications belong to the task they concern. A new task requires the user's confirmation of a separate, independently reviewable deliverable. That confirmation is permission, never an obligation: writing notes, organizing knowledge, and updating records within existing scope happen directly in those records, without a board line. Classify PR feedback by what it requests using the same table; its source does not itself authorize a change. The same agent may serve different phases on the same task.
 
 ### Records
 
-- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` is one short block - at most 5 lines, no blank lines, so it fits `csm show`'s first-paragraph slice - stating what the session is and its current focus, rewritten in place when the focus shifts. `Key links` holds durable session pointers (repo, docs, related sessions, transcript). Not a log: no completed-task history or board restatement (`tasks/INDEX.md` carries status), no branch/commit/PR identifiers (task `Progress` carries them), no rulings, rationale, or measurements (`notes/` and tasks carry them), and no investigation or debugging steps.
-- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = executed and reviewed locally; PR creation, CI, approval, and merge are not part of that status. Later code changes alone do not reopen a historical Done task; requested changes follow the table. Move a task's line between sections to change its status. Within a section, line order = execution order; ids are stable handles. A new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board alone carries the plan.
+- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` is one short block - at most 5 lines, no blank lines, so it fits `csm show`'s first-paragraph slice - stating the session's mission and current problem focus. A focus change changes the problem or scope being addressed; progress within that scope belongs in task records.
+
+  The coordinator maintains this session description. During execution of an existing task, record any needed correction to the description in that task's `Progress` for the coordinator to reconcile; leave `state.md` unchanged. Before the work has a task, `Context` may also hold one sentence preserving an unfinished mandate's scope and authorized phase; move that sentence to the task's `Progress` when the task is created.
+
+  `Key links` holds durable session pointers (repo, docs, related sessions, transcript). Task status and order belong in `tasks/INDEX.md`; outcomes and branch/commit/PR identifiers belong in task `Progress`; rulings, rationale, and measurements belong in `notes/` or the relevant task. `state.md` is not a task history or investigation/debugging log.
+- `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = complete under the endpoint rules above, including local review where required. PR creation, CI, approval, and merge are not prerequisites. Later code changes alone do not reopen a historical Done task; requested changes follow the table. Move a task's line between sections to change its status. Within a section, line order = execution order; ids are stable handles. A new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board alone carries the plan.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
 - A board line - `<id> <slug>`, with the `needs:` tail last. The `[csm]` block renders the board by section, each task's head and `needs:` tail only; what a task is about lives in `tasks/<id>-<slug>.md`.
 - `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. `Progress` is the task's current outcome state, rewritten in place as the task advances: what changed, where (files, branch, commit, PR), the verification result, and what remains - never an append-only log, and never investigation, test-fixing, or CI-debugging steps. Status lives only in INDEX.
@@ -65,14 +69,14 @@ Before relying on a recorded conclusion, check its premise, only as far as neede
 
 When evidence contradicts a user requirement, report the discrepancy and retain the requirement until the user changes it. Correcting a factual record does not authorize a lifecycle transition; board moves follow the requested action in the table. Claims leave no board mark, so another worker's activity is unknowable: ask before claiming when there is real ambiguity, and leave work you did not do in place.
 
-**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions. Route by action and content, not role identity alone: task Scope/Progress for task work, `notes/` for reusable findings and rulings, and `state.md` `Context` only when the session's mission or current focus changes - task execution, test or CI troubleshooting, PR creation, and merge do not touch `state.md`. Within an updated `Context` or `Progress`, replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself. Keep outcomes and remaining work sufficient to resume, without duplicating git or narrating investigation, test, or CI steps. PR feedback and later changes still use the original task's records.
+**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions. Use the record destinations and update boundaries defined above. Within an updated `Context` or `Progress`, replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself. Keep outcomes and remaining work sufficient to resume, without duplicating git or narrating investigation, test, or CI steps. PR feedback and later changes still use the original task's records.
 
 **Project output.** Code, comments, branch names, commits, and PRs describe the project's behavior, technical rationale, and verification. Keep csm session identifiers, internal task IDs, workspace-note paths, and conversation attributions out of those artifacts. Explain decisions without requiring access to csm or the conversation. Record branch names, commit SHAs, and PR URLs in task Progress for traceability.
 
 **Record maintenance.** Roles describe these duties; they do not grant permission to enter a phase.
 
-- Coordinator - maintains state.md, notes, scripts, and the board; rewrites `state.md` `Context` in place when the session's focus shifts and strips task and process drift from it, creates task Scope + AC + SOP, maintains dependencies, and writes Review. At review, normalize Progress to current outcome state. Workers self-claim; do not assign or track them.
-- Worker - maintains the task file and its board line; touches `state.md` `Context` only before a task exists. Under an execution mandate, select from the authorized Open or Pending fix tasks in board order, checking `needs:`. Skip unmet or unverified dependencies only to another task within that mandate; otherwise report the wait. Execute the SOP, record outcomes in Progress, and raise Open questions if stuck. Submit at the execution endpoint in the table.
+- Coordinator - maintains state.md, notes, scripts, and the board; creates task Scope + AC + SOP, maintains dependencies, and writes Review. At review, normalize Progress to current outcome state. Workers self-claim; do not assign or track them.
+- Worker - maintains the task file and its board line. Under an execution mandate, select from the authorized Open or Pending fix tasks in board order, checking `needs:`. Skip unmet or unverified dependencies only to another task within that mandate; otherwise report the wait. Execute the SOP, record outcomes in Progress, and raise Open questions if stuck. Submit at the execution endpoint in the table.
 
 **Cross-repo:** the same session name in each repo shares one state.md + tasks/.
 
@@ -225,7 +229,7 @@ mod tests {
         // The stop leaves the files resumable, and mandates survive interruptions.
         assert!(block.contains("Leave the files sufficient to resume: results, remaining work, and the endpoint reached."));
         assert!(block.contains(
-            "preserve its scope and phase in the existing task's Progress, or state.md Context before a task exists."
+            "preserve its scope and phase in the task's Progress, or use the pre-task exception defined under state.md."
         ));
         // Within the authorized scope, work is autonomous.
         assert!(block.contains(
@@ -238,7 +242,7 @@ mod tests {
         let block = csm_block("/home/user/.csm");
         // Done closes the local loop; PR/CI/approval/merge sit outside it.
         assert!(block.contains(
-            "**Done** = executed and reviewed locally; PR creation, CI, approval, and merge are not part of that status."
+            "**Done** = complete under the endpoint rules above, including local review where required. PR creation, CI, approval, and merge are not prerequisites."
         ));
         // Code changes alone never reopen Done; requested changes follow the table.
         assert!(block.contains(
@@ -290,10 +294,12 @@ mod tests {
         assert!(block.contains(
             "at most 5 lines, no blank lines, so it fits `csm show`'s first-paragraph slice"
         ));
-        assert!(block.contains("rewritten in place when the focus shifts"));
+        assert!(block.contains(
+            "A focus change changes the problem or scope being addressed; progress within that scope belongs in task records."
+        ));
         assert!(block.contains("`Key links` holds durable session pointers"));
         assert!(block.contains(
-            "no completed-task history or board restatement (`tasks/INDEX.md` carries status), no branch/commit/PR identifiers (task `Progress` carries them), no rulings, rationale, or measurements (`notes/` and tasks carry them), and no investigation or debugging steps."
+            "Task status and order belong in `tasks/INDEX.md`; outcomes and branch/commit/PR identifiers belong in task `Progress`; rulings, rationale, and measurements belong in `notes/` or the relevant task. `state.md` is not a task history or investigation/debugging log."
         ));
         assert!(block.contains("**You maintain these files, not csm.**"));
     }
@@ -407,14 +413,12 @@ mod tests {
             "**Record maintenance.** Roles describe these duties; they do not grant permission to enter a phase."
         ));
         assert!(block.contains("- Coordinator - maintains state.md, notes, scripts, and the board"));
-        assert!(block.contains(
-            "rewrites `state.md` `Context` in place when the session's focus shifts and strips task and process drift from it"
-        ));
+        assert!(block.contains("The coordinator maintains this session description."));
         assert!(block
             .contains("creates task Scope + AC + SOP, maintains dependencies, and writes Review."));
         assert!(block.contains("At review, normalize Progress to current outcome state."));
         assert!(block.contains("Workers self-claim; do not assign or track them."));
-        assert!(block.contains("- Worker - maintains the task file and its board line; touches `state.md` `Context` only before a task exists."));
+        assert!(block.contains("- Worker - maintains the task file and its board line."));
         assert!(block.contains(
             "Execute the SOP, record outcomes in Progress, and raise Open questions if stuck."
         ));
@@ -429,9 +433,7 @@ mod tests {
             "**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions."
         ));
         // Routing is by action and content, and state.md is out of the task loop.
-        assert!(block.contains(
-            "Route by action and content, not role identity alone: task Scope/Progress for task work, `notes/` for reusable findings and rulings, and `state.md` `Context` only when the session's mission or current focus changes - task execution, test or CI troubleshooting, PR creation, and merge do not touch `state.md`."
-        ));
+        assert!(block.contains("Use the record destinations and update boundaries defined above."));
         // An updated section reads as current state, not as an append log.
         assert!(block.contains(
             "replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself"
