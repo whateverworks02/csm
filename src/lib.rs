@@ -1,6 +1,4 @@
-//! csm library: the workspace-memory engine behind the `csm` binary, shared
-//! with the dev-side `csm-eval` instrument so both run the same store,
-//! workspace, and deploy code paths.
+//! csm library: the workspace-memory engine behind the `csm` binary.
 
 pub mod agent;
 pub mod doctor;
