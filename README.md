@@ -65,13 +65,14 @@ cso() { csm "$@" -a opencode; }
 | --- | --- |
 | `csm <name>` | Start or resume a session and launch its agent (`claude` by default) |
 | `csm [-a <agent>]` | Pick a session whose origin is this directory |
-| `csm list` | List all sessions |
+| `csm list [--archived]` | List active sessions (`--archived`: the archived ones) |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
 | `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
 | `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
+| `csm archive <name>` / `csm unarchive <name>` | Retain a session off the daily surfaces / return it to them |
 | `csm rename <old> <new>` | Rename and re-home to the current directory |
 | `csm rm <name>` | Delete a session and its workspace (`-f` for a pinned one) |
-| `csm gc [--older-than N]` | Collect unpinned sessions (unfinished boards are kept) |
+| `csm gc [--older-than N]` | Collect unpinned, unarchived sessions (unfinished boards are kept) |
 | `csm doctor [--fix]` | Diagnose consistency and agent wiring; `--fix` repairs consistency |
 
 `show` defaults to `$CSM_SESSION`, else opens a picker.

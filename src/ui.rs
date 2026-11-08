@@ -141,6 +141,13 @@ pub fn no_sessions_hint() {
     hint("start one with: csm <name>");
 }
 
+/// The "no active sessions" empty state - every session is archived - with a
+/// dim pointer at the archived listing.
+pub fn no_active_sessions_hint() {
+    eprintln!("{}", epaint(DIM, "no active sessions."));
+    hint("csm list --archived");
+}
+
 /// `y/N` confirmation prompt on stderr. Returns true for `y` (case-insensitive);
 /// empty or anything else is false.
 pub fn confirm(msg: &str) -> Result<bool> {

@@ -3,7 +3,7 @@
 //! Layout (`workspace::SCAFFOLD` is what the per-session part is created
 //! from, and is authoritative - this is a reading map, not a second list):
 //!   ~/.csm/
-//!     index.json          - kv: { sessions: { <name>: { origin_pwd, created_at, last_access, pinned } } }
+//!     index.json          - kv: { sessions: { <name>: { origin_pwd, created_at, last_access, pinned, archived_at } } }
 //!     sessions/<name>/
 //!       state.md
 //!       scripts/INDEX.md
@@ -27,6 +27,18 @@ pub struct SessionMeta {
     pub created_at: String,
     pub last_access: String,
     pub pinned: bool,
+    /// Archive stamp; absent = active. Archived sessions stay on disk and are
+    /// skipped by the daily surfaces and `gc`; naming one revives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
+}
+
+impl SessionMeta {
+    /// Whether the session is archived (off the daily surfaces, exempt from
+    /// `gc`). The one definition of the split the surfaces filter on.
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -113,8 +125,18 @@ pub fn require_session(name: &str) -> Result<SessionMeta> {
 }
 
 /// Create the session if missing, refresh `last_access`, persist, return meta.
-/// `origin_pwd` is only used at creation; it is never overwritten.
+/// `origin_pwd` is only used at creation; it is never overwritten. Touching
+/// revives an archived session (clears `archived_at`); use
+/// [`touch_session_reviving`] when the caller must report the revival.
 pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
+    Ok(touch_session_reviving(name, origin_pwd)?.0)
+}
+
+/// `touch_session`, additionally reporting whether the touch revived an
+/// archived session (`true` when `archived_at` was cleared). Naming a session
+/// is an explicit request to work on it, so starting/resuming revives it;
+/// `cmd_start` prints the revival notice from this flag.
+pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMeta, bool)> {
     let mut idx = load_index()?;
     let meta = idx
         .sessions
@@ -124,16 +146,19 @@ pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
             created_at: now_iso(),
             last_access: now_iso(),
             pinned: false,
+            archived_at: None,
         });
+    let revived = meta.archived_at.take().is_some();
     meta.last_access = now_iso();
     let clone = meta.clone();
     save_index(&idx)?;
-    Ok(clone)
+    Ok((clone, revived))
 }
 
 /// Like `touch_session` but never creates: returns `None` if the session does
 /// not exist. Used by the SessionStart hook, which must not create sessions
-/// for unknown `$CSM_SESSION` values.
+/// for unknown `$CSM_SESSION` values. Leaves `archived_at` alone - only an
+/// explicit resume revives.
 pub fn touch_if_exists(name: &str) -> Result<Option<SessionMeta>> {
     let mut idx = load_index()?;
     let meta = match idx.sessions.get_mut(name) {
@@ -155,6 +180,25 @@ pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
         .with_context(|| format!("no csm session named {:?}", name))?;
     meta.pinned = pinned;
     save_index(&idx)
+}
+
+/// Archive or unarchive a session; errors if it does not exist. Returns whether
+/// the state changed: archiving an already-archived session leaves its original
+/// `archived_at` untouched and returns `false` (symmetrically for unarchive),
+/// so a repeated command reports the existing state instead of resetting it.
+pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
+    let mut idx = load_index()?;
+    let meta = idx
+        .sessions
+        .get_mut(name)
+        .with_context(|| format!("no csm session named {:?}", name))?;
+    let changed = archived != meta.is_archived();
+    if changed {
+        // Only a transition writes; a repeat keeps the existing stamp.
+        meta.archived_at = archived.then(now_iso);
+        save_index(&idx)?;
+    }
+    Ok(changed)
 }
 
 /// Rename a session and re-point its `origin_pwd` to `new_origin_pwd`.
@@ -344,6 +388,87 @@ mod tests {
             set_pinned("a", false).unwrap();
             assert!(!require_session("a").unwrap().pinned);
             assert!(set_pinned("ghost", true).is_err());
+        });
+    }
+
+    // --- archive ---
+
+    /// Active sessions omit `archived_at` from `index.json`; archived ones
+    /// carry it; a legacy entry without the key loads as active.
+    #[test]
+    fn session_meta_archived_at_serializes_sparsely() {
+        let active = SessionMeta {
+            origin_pwd: "/o".into(),
+            created_at: "2026-10-01T00:00:00+00:00".into(),
+            last_access: "2026-10-01T00:00:00+00:00".into(),
+            pinned: false,
+            archived_at: None,
+        };
+        let json = serde_json::to_string(&active).unwrap();
+        assert!(!json.contains("archived_at"), "{json}");
+
+        let archived = SessionMeta {
+            archived_at: Some("2026-10-21T09:14:00+00:00".into()),
+            ..active
+        };
+        let json = serde_json::to_string(&archived).unwrap();
+        assert!(json.contains("archived_at"), "{json}");
+
+        let legacy = r#"{"origin_pwd":"/o","created_at":"t","last_access":"t","pinned":false}"#;
+        let parsed: SessionMeta = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.archived_at.is_none(), "legacy entry is active");
+    }
+
+    #[test]
+    #[serial]
+    fn set_archived_is_idempotent_and_errors_unknown() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/o").unwrap();
+            assert!(set_archived("a", true).unwrap());
+            let first = require_session("a").unwrap().archived_at.unwrap();
+            // Repeating archive preserves the original stamp.
+            assert!(!set_archived("a", true).unwrap());
+            assert_eq!(require_session("a").unwrap().archived_at.unwrap(), first);
+
+            assert!(set_archived("a", false).unwrap());
+            assert!(require_session("a").unwrap().archived_at.is_none());
+            assert!(!set_archived("a", false).unwrap(), "already active");
+
+            assert!(set_archived("ghost", true).is_err());
+            assert!(set_archived("ghost", false).is_err());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn touch_session_revives_archived_and_reports_it() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/o").unwrap();
+            set_archived("a", true).unwrap();
+
+            let (meta, revived) = touch_session_reviving("a", "/o").unwrap();
+            assert!(revived, "touching an archived session revives it");
+            assert!(meta.archived_at.is_none());
+            assert!(require_session("a").unwrap().archived_at.is_none());
+
+            let (_, revived) = touch_session_reviving("a", "/o").unwrap();
+            assert!(!revived, "an active session has nothing to revive");
+            let (_, revived) = touch_session_reviving("new", "/o").unwrap();
+            assert!(!revived, "a fresh session was never archived");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn touch_if_exists_preserves_archived_at() {
+        with_csm_home(|_dir| {
+            touch_session("a", "/o").unwrap();
+            set_archived("a", true).unwrap();
+            // The SessionStart hook refreshes last_access only; archive is a
+            // user-facing state, not something a hook clears.
+            let meta = touch_if_exists("a").unwrap().expect("known session");
+            assert!(meta.archived_at.is_some());
+            assert!(require_session("a").unwrap().archived_at.is_some());
         });
     }
 

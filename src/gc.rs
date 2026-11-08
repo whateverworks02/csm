@@ -1,5 +1,6 @@
-//! Garbage collection for unpinned sessions. Pinned sessions are never listed
-//! or deleted by gc. Deletion is a hard delete (workspace dir + index entry).
+//! Garbage collection for unpinned sessions. Pinned and archived sessions are
+//! never listed or deleted by gc. Deletion is a hard delete (workspace dir +
+//! index entry).
 //!
 //! Guardrail (task 012): a candidate whose board still holds non-Done tasks is
 //! never collected - the board is the only record of that work, and a hard
@@ -29,7 +30,7 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let mut candidates: Vec<Candidate> = idx
         .sessions
         .iter()
-        .filter(|(_, m)| !m.pinned)
+        .filter(|(_, m)| !m.pinned && !m.is_archived())
         .filter(|(_, m)| {
             older_than.is_none_or(|d| {
                 store::parse_time(&m.last_access)
@@ -261,6 +262,26 @@ mod tests {
             run(Some(5), true).unwrap();
             assert!(dir_exists("pinned"), "pinned session must never be gc'd");
             assert!(store::require_session("pinned").is_ok(), "index entry kept");
+        });
+    }
+
+    /// Archive promises quiet retention: even an old, unpinned session with an
+    /// all-Done board (which gc would otherwise collect) is never a candidate.
+    #[test]
+    #[serial]
+    fn skips_archived_sessions() {
+        with_csm_home(|_dir| {
+            scaffold_session("archived");
+            write_board("archived", "## Done\n- 001 x\n");
+            store::set_archived("archived", true).unwrap();
+            backdate("archived", 10);
+            run(Some(5), true).unwrap();
+            assert!(
+                dir_exists("archived"),
+                "archived session must never be gc'd"
+            );
+            let meta = store::require_session("archived").expect("index entry kept");
+            assert!(meta.is_archived());
         });
     }
 
