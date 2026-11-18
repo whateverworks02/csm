@@ -64,7 +64,7 @@ cso() { csm "$@" -a opencode; }
 | Command | What it does |
 | --- | --- |
 | `csm <name>` | Start or resume a session and launch its agent (`claude` by default) |
-| `csm [-a <agent>]` | Pick a session whose origin is this directory |
+| `csm [-a <agent>]` | Pick a local session or browse sessions from other repositories |
 | `csm list [--archived]` | List active sessions (`--archived`: the archived ones) |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
 | `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
@@ -76,6 +76,8 @@ cso() { csm "$@" -a opencode; }
 | `csm doctor [--fix]` | Diagnose consistency and agent wiring; `--fix` repairs consistency |
 
 `show` defaults to `$CSM_SESSION`, else opens a picker.
+
+When you pick a session from another repository, the agent launches in your current directory. Choose “register and launch” to make the same session appear in this directory's local list on future launches.
 
 ## The workspace
 

@@ -219,10 +219,8 @@ mod tests {
     /// Set `name`'s `last_access` to `days_ago` days before now, as RFC3339
     /// (what `now_iso` writes and `parse_time` reads). `last_access` is `pub`.
     fn backdate(name: &str, days_ago: i64) {
-        let mut idx = store::load_index().unwrap();
         let ts = (Local::now() - chrono::Duration::days(days_ago)).to_rfc3339();
-        idx.sessions.get_mut(name).unwrap().last_access = ts;
-        store::save_index(&idx).unwrap();
+        store::set_last_access(name, ts).unwrap();
     }
 
     fn dir_exists(name: &str) -> bool {

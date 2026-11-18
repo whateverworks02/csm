@@ -9,8 +9,8 @@
 //!
 //! Launching: `csm <name>` sets up / refreshes the session, then launches the
 //! agent via a per-agent adapter (`--agent`, default `claude`). Without a
-//! name, csm offers a picker over sessions whose origin is the current
-//! directory - bare `csm` or `csm -a <agent>` (which is how csx/cso/csp-style
+//! name, csm offers a picker for local and cross-repo sessions - bare `csm`
+//! or `csm -a <agent>` (which is how csx/cso/csp-style
 //! shell shortcuts get the picker when called bare). The Claude
 //! adapter runs `claude` with `CSM_SESSION=<name>`; on `/clear`, Claude Code
 //! fires SessionStart again (source=clear), the hook reads `CSM_SESSION` (still
@@ -29,7 +29,7 @@ use std::io::Write;
     name = "csm",
     version,
     about = "Workspace memory for coding agents (cross-time, cross-repo)",
-    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks one for this directory."
+    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks a local or cross-repo session."
 )]
 struct Cli {
     /// Agent to launch (claude, pi, codex, opencode; default claude). May lead
@@ -205,6 +205,23 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
     }
     workspace::ensure_workspace(name, &meta)?;
 
+    wait_for_agent(spawn_agent(name, agent_adapter.as_ref())?)
+}
+
+fn launch_picked_session(
+    name: &str,
+    meta: &store::SessionMeta,
+    agent: &str,
+    register_dir: Option<&str>,
+) -> Result<()> {
+    let agent_adapter = agent::agent_for(agent)?;
+    let child = store::start_picked_session(name, &meta.created_at, register_dir, || {
+        spawn_agent(name, agent_adapter.as_ref())
+    })?;
+    wait_for_agent(child)
+}
+
+fn spawn_agent(name: &str, agent_adapter: &dyn agent::Agent) -> Result<std::process::Child> {
     let dir = store::session_dir(name)?;
     eprintln!(
         "{} {} {}",
@@ -220,10 +237,14 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
         "{}",
         ui::epaint(ui::DIM, &format!("launching {}...", agent_adapter.id())),
     );
-    let status = agent_adapter.launch(name).status().context(format!(
+    agent_adapter.launch(name).spawn().context(format!(
         "failed to launch {} (is it installed and on PATH?)",
         agent_adapter.id()
-    ))?;
+    ))
+}
+
+fn wait_for_agent(mut child: std::process::Child) -> Result<()> {
+    let status = child.wait().context("waiting for agent to exit")?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -299,59 +320,117 @@ fn resolve_agent(root: Option<String>, parsed: Option<String>) -> Result<String>
     }
 }
 
-/// `csm` / `csm -a <agent>` with no session name: list sessions whose
-/// `origin_pwd` is the current directory and let the user pick one to start,
-/// launching with `agent` (id already validated by `resolve_agent`).
-/// Prints a hint and exits if none match.
+/// Pick a local or cross-repo session to launch in the calling directory.
 fn cmd_pick_here(agent: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let cwd_str = cwd.display().to_string();
+    let display_dir = ui::abbrev_home(&cwd_str);
     let idx = store::load_index()?;
-    let rows: Vec<(String, store::SessionMeta)> = idx
-        .sessions
-        .iter()
-        .filter(|(_, m)| m.origin_pwd == cwd_str && !m.is_archived())
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if rows.is_empty() {
-        eprintln!(
-            "{} {}",
-            ui::epaint(ui::DIM, "no csm sessions for"),
-            ui::epaint(ui::BOLD, &ui::abbrev_home(&cwd_str)),
-        );
-        let start = if agent == "claude" {
-            "csm <name>".to_string()
-        } else {
-            format!("csm <name> -a {agent}")
-        };
-        ui::hint(&format!("start one with: {start}"));
-        // The cwd does have sessions - they are all archived.
-        if idx
-            .sessions
-            .values()
-            .any(|m| m.origin_pwd == cwd_str && m.is_archived())
-        {
-            ui::hint("csm list --archived");
+    let (local, other): (Vec<_>, Vec<_>) = list_rows(&idx, false)
+        .into_iter()
+        .partition(|(_, m)| m.is_registered_in(&cwd_str));
+    loop {
+        print_session_choices(&format!("sessions for {display_dir}"), &local);
+        if local.is_empty() {
+            eprintln!("  no active sessions in this directory");
+            let start = if agent == "claude" {
+                "csm <name>".to_string()
+            } else {
+                format!("csm <name> -a {agent}")
+            };
+            ui::hint(&format!("start one with: {start}"));
+            if idx
+                .sessions
+                .values()
+                .any(|m| m.is_archived() && m.is_registered_in(&cwd_str))
+            {
+                ui::hint("csm list --archived");
+            }
         }
-        return Ok(());
+        eprintln!("  o  choose from other repositories");
+        match pick_launch_session(&local, "o", "other repositories")? {
+            LaunchChoice::Session(name, meta) => {
+                return launch_picked_session(name, meta, agent, None)
+            }
+            LaunchChoice::Quit => return Ok(()),
+            LaunchChoice::Navigate => {}
+        }
+
+        loop {
+            print_session_choices("sessions from other repositories", &other);
+            if other.is_empty() {
+                eprintln!("  no active sessions in other repositories");
+            }
+            let (name, meta) = match pick_launch_session(&other, "b", "back")? {
+                LaunchChoice::Session(name, meta) => (name, meta),
+                LaunchChoice::Navigate => break,
+                LaunchChoice::Quit => return Ok(()),
+            };
+
+            eprintln!("Selected {name}. {agent} will launch in {display_dir}.");
+            eprintln!("You can register this directory to pick {name} here next time.");
+            let options = "'l' launch here, 'r' register and launch here, 'b' back, 'q' quit";
+            loop {
+                match read_picker_input(options)?.to_ascii_lowercase().as_str() {
+                    "l" => return launch_picked_session(name, meta, agent, None),
+                    "r" => {
+                        return launch_picked_session(name, meta, agent, Some(&cwd_str));
+                    }
+                    "b" => break,
+                    "q" => return Ok(()),
+                    _ => eprintln!("Invalid selection. Choose {options}."),
+                }
+            }
+        }
     }
-    let Some(name) = pick_session(&format!("sessions for {}", ui::abbrev_home(&cwd_str)), rows)?
-    else {
-        return Ok(());
-    };
-    cmd_start(&name, agent)
 }
 
-/// Print a numbered list of sessions (most recently accessed first) and read a
-/// 1-based selection from stdin. Returns the chosen name, or `None` if the user
-/// aborted (empty/`q`) or entered an invalid index. `rows` must be non-empty;
-/// callers handle the empty case with their own message. List and prompt go to
-/// stderr so stdout stays clean for piping.
-fn pick_session(
-    label: &str,
-    mut rows: Vec<(String, store::SessionMeta)>,
-) -> Result<Option<String>> {
-    rows.sort_by(|a, b| b.1.last_access.cmp(&a.1.last_access));
+enum LaunchChoice<'a> {
+    Session(&'a str, &'a store::SessionMeta),
+    Navigate,
+    Quit,
+}
+
+fn pick_launch_session<'a>(
+    rows: &[(&'a String, &'a store::SessionMeta)],
+    nav_key: &str,
+    nav_label: &str,
+) -> Result<LaunchChoice<'a>> {
+    let actions = format!("'{nav_key}' {nav_label}, 'q' quit");
+    let options = if rows.is_empty() {
+        actions
+    } else {
+        format!("1-{} select a session, {actions}", rows.len())
+    };
+    loop {
+        let input = read_picker_input(&options)?;
+        if input.eq_ignore_ascii_case("q") {
+            return Ok(LaunchChoice::Quit);
+        }
+        if input.eq_ignore_ascii_case(nav_key) {
+            return Ok(LaunchChoice::Navigate);
+        }
+        if let Ok(i) = input.parse::<usize>() {
+            if (1..=rows.len()).contains(&i) {
+                let (name, meta) = rows[i - 1];
+                return Ok(LaunchChoice::Session(name, meta));
+            }
+        }
+        eprintln!("Invalid selection. Choose {options}.");
+    }
+}
+
+fn read_picker_input(options: &str) -> Result<String> {
+    eprint!("\n{} ", ui::epaint(ui::DIM, &format!("{options}:")));
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Ok("q".into());
+    }
+    Ok(line.trim().to_string())
+}
+
+fn print_session_choices(label: &str, rows: &[(&String, &store::SessionMeta)]) {
     eprintln!("{}:", ui::epaint(ui::BOLD, label));
     for (i, (name, m)) in rows.iter().enumerate() {
         let pin = if m.pinned {
@@ -370,17 +449,12 @@ fn pick_session(
             )
         );
     }
-    eprint!(
-        "\n{} ",
-        ui::epaint(
-            ui::DIM,
-            &format!("select a session (1-{}), 'q' to quit:", rows.len())
-        ),
-    );
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    let line = line.trim();
+}
+
+/// Pick an active session for a command that only needs its name.
+fn pick_session(label: &str, rows: &[(&String, &store::SessionMeta)]) -> Result<Option<String>> {
+    print_session_choices(label, rows);
+    let line = read_picker_input(&format!("select a session (1-{}), 'q' to quit", rows.len()))?;
     if line.is_empty() || line.eq_ignore_ascii_case("q") {
         eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
         return Ok(None);
@@ -406,17 +480,12 @@ fn pick_session_all() -> Result<Option<String>> {
         ui::no_sessions_hint();
         return Ok(None);
     }
-    let rows: Vec<(String, store::SessionMeta)> = idx
-        .sessions
-        .iter()
-        .filter(|(_, m)| !m.is_archived())
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let rows = list_rows(&idx, false);
     if rows.is_empty() {
         ui::no_active_sessions_hint();
         return Ok(None);
     }
-    pick_session("all sessions", rows)
+    pick_session("all sessions", &rows)
 }
 
 /// Resolve a session name from an optional arg: an explicit name wins;
@@ -951,6 +1020,7 @@ mod tests {
     fn meta(origin: &str, last_access: &str, archived_at: Option<&str>) -> store::SessionMeta {
         store::SessionMeta {
             origin_pwd: origin.into(),
+            registered_dirs: Vec::new(),
             created_at: last_access.into(),
             last_access: last_access.into(),
             pinned: false,
