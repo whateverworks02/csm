@@ -257,7 +257,7 @@ pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
 
 /// Update sprint membership without changing the session's access or archive state.
 pub fn set_in_sprint(name: &str, in_sprint: bool) -> Result<()> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
         .sessions
         .get_mut(name)

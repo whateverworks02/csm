@@ -69,7 +69,8 @@ cso() { csm "$@" -a opencode; }
 | `csm [-a <agent>]` | Pick a local session or browse sessions from other repositories |
 | `csm list [--archived]` | List active sessions (`--archived`: the archived ones) |
 | `csm sprint` | Show the selected active sessions and their Context |
-| `csm sprint add <name>` / `csm sprint remove <name>` | Add an active session to the sprint or remove a session from it |
+| `csm sprint add [name]` | Add an active session to the sprint, or omit the name to pick from eligible sessions |
+| `csm sprint remove <name>` | Remove a session from the sprint |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
 | `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
 | `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
