@@ -105,7 +105,7 @@ Each session is a directory at `~/.csm/sessions/<name>/` (set `CSM_HOME` to move
 | `tasks/INDEX.md` | The board. A task's status is the section its line is in: `Open` -> `Pending review` -> `Pending fix` -> `Done`. Line order within a section is execution order. |
 | `tasks/<id>-<slug>.md` | One file per task: `Scope`, `AC`, `SOP`, `Open questions`, `Progress`, `Review` - sized to the work, not to the template. |
 | `notes/` | Deep-dive articles that outlive a task, entered through `notes/INDEX.md`. |
-| `views/` | One HTML page for a task whose logic a human must judge whole, entered through `views/INDEX.md`. |
+| `views/` | Optional self-contained HTML task pages for readers, required when requested. Each page is listed in `views/INDEX.md` and linked from the task's `View:` header. |
 | `scripts/` | Shared utility scripts, entered through `scripts/INDEX.md`. |
 
 `state.md` and `tasks/INDEX.md` are injected into the agent on launch - they are the orientation surface. The rest is read on demand.
