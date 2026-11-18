@@ -21,11 +21,11 @@ A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and
 ### Turn decisions
 
 1. **Authority.** Follow this workflow while the session is active and correct conflicting workflow rules in memory or habit. The user sets requirements and authorizes work. Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption. Board status, facts, role, and newly discovered work confer no authority. Clarify if the authority you need is missing.
-2. **Scope.** Identify the requested outcome and keep questions, reviews, and changes with the task they concern. Route PR feedback by what it requests and check authority as for any other request. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
+2. **Scope.** Identify the requested outcome and keep questions, reviews, and changes with the task they concern. Classify PR feedback by what it requests. Its source alone cannot authorize a change. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
 3. **Phase.** Use the table to identify the authorized action. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
 4. **Prerequisites.** Check only evidence the next decision needs, including `needs:` before claiming. Skip a task with unmet or unverified dependencies only to select another authorized candidate. If none qualifies, report the wait. If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it. Interruption alone triggers no check.
 
-   Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings.
+   Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings.
 
    For an unknown, record the missing evidence in the consuming task's Open questions, pause dependent work, and continue independent authorized work. Report what is confirmed, what remains unknown or undone, and the next action when evidence limits progress. Report any conflict with a user requirement and retain the requirement until the user changes it.
 5. **Ownership.** Update only the relevant entries and distinguish proposals from user decisions. Coordinators maintain state.md, notes, scripts, and the board, create Scope, AC, and SOP, maintain dependencies, and write Review while normalizing Progress. Workers maintain their task file and board line, follow its SOP, and raise Open questions when stuck. Workers self-claim without assignment or tracking. Claims leave no board mark. Ask before claiming if there is real ownership ambiguity and leave others' work in place.
@@ -164,7 +164,7 @@ mod tests {
         assert!(block.contains("record its link in Progress"));
         assert!(block.contains("keep questions, reviews, and changes with the task they concern"));
         assert!(block.contains(
-            "Route PR feedback by what it requests and check authority as for any other request."
+            "Classify PR feedback by what it requests. Its source alone cannot authorize a change."
         ));
     }
 
@@ -349,7 +349,7 @@ mod tests {
             "If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it."
         ));
         assert!(block.contains("Interruption alone triggers no check."));
-        assert!(block.contains("Before using a recorded conclusion, verify the relevant premise."));
+        assert!(block.contains("Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise."));
         assert!(block.contains("Changes or age are cues to check, not proof of failure."));
         assert!(block.contains(
             "Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings."
