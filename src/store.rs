@@ -3,7 +3,7 @@
 //! Layout (`workspace::SCAFFOLD` is what the per-session part is created
 //! from, and is authoritative - this is a reading map, not a second list):
 //!   ~/.csm/
-//!     index.json          - kv: { sessions: { <name>: { origin_pwd, created_at, last_access, pinned, archived_at } } }
+//!     index.json          - session metadata, including origin and additional directories
 //!     sessions/<name>/
 //!       state.md
 //!       scripts/INDEX.md
@@ -19,11 +19,15 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub origin_pwd: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registered_dirs: Vec<String>,
     pub created_at: String,
     pub last_access: String,
     pub pinned: bool,
@@ -34,6 +38,10 @@ pub struct SessionMeta {
 }
 
 impl SessionMeta {
+    pub fn is_registered_in(&self, dir: &str) -> bool {
+        self.origin_pwd == dir || self.registered_dirs.iter().any(|path| path == dir)
+    }
+
     /// Whether the session is archived (off the daily surfaces, exempt from
     /// `gc`). The one definition of the split the surfaces filter on.
     pub fn is_archived(&self) -> bool {
@@ -103,13 +111,30 @@ pub fn load_index() -> Result<Index> {
     Ok(idx)
 }
 
-pub fn save_index(idx: &Index) -> Result<()> {
+/// Acquire the writer lock before reading; keep the returned file open
+/// through the save. The lock file stays in place when the index is replaced.
+fn load_index_for_update() -> Result<(File, Index)> {
+    let home = csm_home()?;
+    std::fs::create_dir_all(&home)?;
+    let path = home.join("index.lock");
+    let lock = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    lock.lock()
+        .with_context(|| format!("locking {}", path.display()))?;
+    Ok((lock, load_index()?))
+}
+
+fn save_index(idx: &Index) -> Result<()> {
     let path = index_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(idx)?;
-    std::fs::write(&path, json)?;
+    let mut temp = tempfile::NamedTempFile::new_in(csm_home()?)?;
+    serde_json::to_writer_pretty(&mut temp, idx)?;
+    temp.flush()?;
+    temp.persist(&path)
+        .with_context(|| format!("replacing {}", path.display()))?;
     Ok(())
 }
 
@@ -137,12 +162,13 @@ pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
 /// is an explicit request to work on it, so starting/resuming revives it;
 /// `cmd_start` prints the revival notice from this flag.
 pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMeta, bool)> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
         .sessions
         .entry(name.to_string())
         .or_insert_with(|| SessionMeta {
             origin_pwd: origin_pwd.to_string(),
+            registered_dirs: Vec::new(),
             created_at: now_iso(),
             last_access: now_iso(),
             pinned: false,
@@ -155,12 +181,36 @@ pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMe
     Ok((clone, revived))
 }
 
+/// Prepare an active picker selection and hold the lock until the agent starts.
+pub fn start_picked_session<T>(
+    name: &str,
+    created_at: &str,
+    register_dir: Option<&str>,
+    start: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let (_lock, mut idx) = load_index_for_update()?;
+    let meta = idx
+        .sessions
+        .get_mut(name)
+        .filter(|meta| !meta.is_archived() && meta.created_at == created_at)
+        .with_context(|| {
+            format!("session {name:?} is no longer available. Reopen the picker to choose again")
+        })?;
+    if let Some(dir) = register_dir.filter(|dir| !meta.is_registered_in(dir)) {
+        meta.registered_dirs.push(dir.to_string());
+    }
+    meta.last_access = now_iso();
+    crate::workspace::ensure_workspace(name, meta)?;
+    save_index(&idx)?;
+    start()
+}
+
 /// Like `touch_session` but never creates: returns `None` if the session does
 /// not exist. Used by the SessionStart hook, which must not create sessions
 /// for unknown `$CSM_SESSION` values. Leaves `archived_at` alone - only an
 /// explicit resume revives.
 pub fn touch_if_exists(name: &str) -> Result<Option<SessionMeta>> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     let meta = match idx.sessions.get_mut(name) {
         Some(m) => m,
         None => return Ok(None),
@@ -173,7 +223,7 @@ pub fn touch_if_exists(name: &str) -> Result<Option<SessionMeta>> {
 
 /// Update the pinned flag. Errors if the session does not exist.
 pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
         .sessions
         .get_mut(name)
@@ -187,7 +237,7 @@ pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
 /// `archived_at` untouched and returns `false` (symmetrically for unarchive),
 /// so a repeated command reports the existing state instead of resetting it.
 pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
         .sessions
         .get_mut(name)
@@ -208,7 +258,7 @@ pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
 /// `old` doesn't exist or `new` already exists. If `old == new`, only re-points
 /// `origin_pwd` (a pure re-home, no dir move).
 pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
 
     if old == new {
         let meta = idx
@@ -252,7 +302,7 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
 
 /// Hard-delete a session: remove its workspace dir and index entry.
 pub fn delete_session(name: &str) -> Result<()> {
-    let mut idx = load_index()?;
+    let (_lock, mut idx) = load_index_for_update()?;
     if !idx.sessions.contains_key(name) {
         anyhow::bail!("no csm session named {:?}", name);
     }
@@ -263,6 +313,13 @@ pub fn delete_session(name: &str) -> Result<()> {
         std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub fn set_last_access(name: &str, timestamp: String) -> Result<()> {
+    let (_lock, mut idx) = load_index_for_update()?;
+    idx.sessions.get_mut(name).unwrap().last_access = timestamp;
+    save_index(&idx)
 }
 
 #[cfg(test)]
@@ -399,6 +456,7 @@ mod tests {
     fn session_meta_archived_at_serializes_sparsely() {
         let active = SessionMeta {
             origin_pwd: "/o".into(),
+            registered_dirs: Vec::new(),
             created_at: "2026-10-01T00:00:00+00:00".into(),
             last_access: "2026-10-01T00:00:00+00:00".into(),
             pinned: false,
@@ -417,6 +475,8 @@ mod tests {
         let legacy = r#"{"origin_pwd":"/o","created_at":"t","last_access":"t","pinned":false}"#;
         let parsed: SessionMeta = serde_json::from_str(legacy).unwrap();
         assert!(parsed.archived_at.is_none(), "legacy entry is active");
+        assert!(parsed.is_registered_in("/o"));
+        assert!(!parsed.is_registered_in("/other"));
     }
 
     #[test]
@@ -469,6 +529,56 @@ mod tests {
             let meta = touch_if_exists("a").unwrap().expect("known session");
             assert!(meta.archived_at.is_some());
             assert!(require_session("a").unwrap().archived_at.is_some());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn picker_rejects_archived_renamed_and_replaced_sessions() {
+        with_csm_home(|_dir| {
+            let chosen = touch_session("a", "/origin").unwrap();
+            set_archived("a", true).unwrap();
+            let start = || -> Result<()> { panic!("a stale session must not launch") };
+            assert!(start_picked_session("a", &chosen.created_at, Some("/other"), start).is_err());
+            let archived = require_session("a").unwrap();
+            assert!(archived.is_archived());
+            assert!(archived.registered_dirs.is_empty());
+            assert_eq!(archived.last_access, chosen.last_access);
+            assert!(!session_dir("a").unwrap().exists());
+
+            set_archived("a", false).unwrap();
+            rename_session("a", "b", "/origin").unwrap();
+            assert!(start_picked_session("a", &chosen.created_at, None, start).is_err());
+            assert!(require_session("a").is_err());
+            assert!(!session_dir("a").unwrap().exists());
+
+            let replacement = touch_session("a", "/different").unwrap();
+            assert_ne!(replacement.created_at, chosen.created_at);
+            assert!(start_picked_session("a", &chosen.created_at, None, start).is_err());
+            assert!(!session_dir("a").unwrap().exists());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn concurrent_picker_registrations_keep_both_directories() {
+        with_csm_home(|_dir| {
+            let chosen = touch_session("a", "/origin").unwrap();
+            let start = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                for dir in ["/first", "/second"] {
+                    let start = &start;
+                    let created_at = &chosen.created_at;
+                    scope.spawn(move || {
+                        start.wait();
+                        start_picked_session("a", created_at, Some(dir), || Ok(())).unwrap();
+                    });
+                }
+            });
+            let meta = require_session("a").unwrap();
+            for dir in ["/origin", "/first", "/second"] {
+                assert!(meta.is_registered_in(dir), "missing directory: {dir}");
+            }
         });
     }
 
