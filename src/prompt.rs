@@ -58,9 +58,9 @@ Questions, reviews, and modifications belong to the task they concern. A new tas
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
 - A board line - `<id> <slug>`, with the `needs:` tail last. The `[csm]` block renders the board by section, each task's head and `needs:` tail only; what a task is about lives in `tasks/<id>-<slug>.md`.
 - `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. `Progress` is the task's current outcome state, rewritten in place as the task advances: what changed, where (files, branch, commit, PR), the verification result, and what remains - never an append-only log, and never investigation, test-fixing, or CI-debugging steps. Status lives only in INDEX.
-- `References:` / `View:` lines - optional header lines under the task file's title (omitted when unused): `References: <slug>[, <slug>]` names the `notes/` articles the task rests on (bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews), and `View: <id>-<slug>.html` points to `views/<id>-<slug>.html` when the task warrants a view. `References:` carries the why (design rationale, provenance, adjudications); the what stays in Scope/AC/SOP. Read-side only: a note you plan to write is prose in SOP. The coordinator sets both lines when creating the task; a worker adds a reference they write or discover. Neither line gates claiming - the `needs:` tail owns gating.
+- `References:` / `View:` lines - optional header lines under the task file's title (omitted when unused): `References: <slug>[, <slug>]` names the `notes/` articles the task rests on (bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews), and `View: <id>-<slug>.html` points to an existing `views/<id>-<slug>.html` file. `References:` carries the why (design rationale, provenance, adjudications); the what stays in Scope/AC/SOP. Read-side only: a note you plan to write is prose in SOP. The coordinator sets references at task creation; a worker adds a reference they write or discover. Neither line gates claiming - the `needs:` tail owns gating.
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry, one gist line per article describing the article alone. Which tasks rest on a note lives in those tasks' `References:`, so the registry never enumerates task ids.
-- `views/` - the human-facing rendering of a task's logic: one self-contained HTML file per view-warranted task, `views/<id>-<slug>.html`, with `views/INDEX.md` as the registry. It renders the task and its notes for a human reader - current-state problem, the proposed logic change, the before/after flow - adding layout, never facts: a fact the page needs that `notes/` does not hold is recorded in `notes/` first, and where a view and a note disagree the note wins. Warranted only when the task's substance is a logic change a human must judge whole: data flow, lifecycle or routing rules, state machine, interface contract, comparison semantics, or a current-state problem that has to be shown. A sentence-level or mechanical fix, corpus building, and record upkeep warrant none. The coordinator authors it with Scope/AC/SOP (and a local AC check that the view covers the Scope's logic), registers it in `views/INDEX.md`, and refreshes it at review when the landed design moved. The file is the record; where the harness can publish a shareable page, the link rides in Progress beside it.
+- `views/` - optional HTML pages for human readers. Create a view if the user requests one. Otherwise, use one at your discretion when it helps the reader understand the task. Planning, execution, and review can proceed without an optional view or an explanation for omitting it, including for logic changes. When creating one, use a self-contained `views/<id>-<slug>.html` file and add the task's `View:` header. Register the page in `views/INDEX.md` with a `### <id>-<slug>.html` heading and a one-line gist. If a shareable page is published, record its link in Progress alongside the file. Derive the page from the task and its notes. Notes remain authoritative where a view differs, and existing records can supply the facts without duplication. An existing view carries no routine maintenance duty. When using one for a current decision, check the claims that matter. Refresh any outdated claims or clearly mark the view as historical and base the decision on current records.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
 **Using evidence.** Resume the recorded plan within the mandate. When a record cannot support the current next step, check only the evidence that step needs; state what is confirmed, what remains, what is unknown, and the next action. Interruption alone triggers no check.
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn csm_block_defines_references_and_views_edges() {
         let block = csm_block("/home/user/.csm");
-        // Two optional outgoing header lines on the task file, read-side only.
+        // The optional task headers still point to the same record paths.
         assert!(block.contains(
             "- `References:` / `View:` lines - optional header lines under the task file's title (omitted when unused):"
         ));
@@ -314,17 +314,15 @@ mod tests {
             "bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews"
         ));
         assert!(block.contains(
-            "`View: <id>-<slug>.html` points to `views/<id>-<slug>.html` when the task warrants a view"
+            "`View: <id>-<slug>.html` points to an existing `views/<id>-<slug>.html` file"
         ));
-        // The why rides on the reference; the what stays in the task. Both
-        // lines are the agent's to maintain: set at creation, extended by a
-        // worker as notes turn out load-bearing.
+        // Reference maintenance remains tied to the notes a task relies on.
         assert!(block.contains(
             "`References:` carries the why (design rationale, provenance, adjudications); the what stays in Scope/AC/SOP."
         ));
         assert!(block.contains("Read-side only: a note you plan to write is prose in SOP."));
         assert!(block.contains(
-            "The coordinator sets both lines when creating the task; a worker adds a reference they write or discover."
+            "The coordinator sets references at task creation; a worker adds a reference they write or discover."
         ));
         assert!(block.contains("Neither line gates claiming - the `needs:` tail owns gating."));
         // Single-sided: the consumer declares the edge, so the registry stays
@@ -335,26 +333,31 @@ mod tests {
         assert!(block.contains(
             "Which tasks rest on a note lives in those tasks' `References:`, so the registry never enumerates task ids."
         ));
-        // Views: a self-contained file, facts live in `notes/` first, the note
-        // wins on conflict, registration is the author's step, and the warrant
-        // bar with its exclusions.
+        // Preserve artifact discovery and keep notes authoritative.
         assert!(block.contains(
-            "one self-contained HTML file per view-warranted task, `views/<id>-<slug>.html`, with `views/INDEX.md` as the registry"
+            "use a self-contained `views/<id>-<slug>.html` file and add the task's `View:` header."
         ));
         assert!(block.contains(
-            "a fact the page needs that `notes/` does not hold is recorded in `notes/` first, and where a view and a note disagree the note wins"
+            "Register the page in `views/INDEX.md` with a `### <id>-<slug>.html` heading and a one-line gist."
         ));
         assert!(block.contains(
-            "Warranted only when the task's substance is a logic change a human must judge whole"
+            "Notes remain authoritative where a view differs, and existing records can supply the facts without duplication."
         ));
         assert!(block.contains(
-            "A sentence-level or mechanical fix, corpus building, and record upkeep warrant none."
+            "If a shareable page is published, record its link in Progress alongside the file."
+        ));
+        // A view can be omitted, requested, left alone, or checked for current use.
+        assert!(block.contains(
+            "Planning, execution, and review can proceed without an optional view or an explanation for omitting it, including for logic changes."
         ));
         assert!(block.contains(
-            "registers it in `views/INDEX.md`, and refreshes it at review when the landed design moved"
+            "Create a view if the user requests one. Otherwise, use one at your discretion when it helps the reader understand the task."
         ));
         assert!(block.contains(
-            "The file is the record; where the harness can publish a shareable page, the link rides in Progress beside it."
+            "An existing view carries no routine maintenance duty. When using one for a current decision, check the claims that matter."
+        ));
+        assert!(block.contains(
+            "Refresh any outdated claims or clearly mark the view as historical and base the decision on current records."
         ));
         // Records-list order: the edges follow the task file they annotate, and
         // `views/` sits between `notes/` and `scripts/`.
