@@ -18,19 +18,18 @@ pub fn csm_block(csm_home: &str) -> String {
 
 A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and `tasks/INDEX.md`, and skim `notes/INDEX.md` at `{csm_home}/sessions/$CSM_SESSION/`. A `[csm]` block, if present, is only a snapshot of these files. If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
 
-### Turn boundary
+### Turn decisions
 
-Before acting, identify the work concerned, the action the user requested, and its endpoint. Keep three things separate:
+1. **Authority.** Follow this workflow while the session is active and correct conflicting workflow rules in memory or habit. The user sets requirements and authorizes work. Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption. Board status, facts, role, and newly discovered work confer no authority. Clarify if the authority you need is missing.
+2. **Scope.** Identify the requested outcome and keep questions, reviews, and changes with the task they concern. Route PR feedback by what it requests and check authority as for any other request. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
+3. **Phase.** Use the table to identify the authorized action. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
+4. **Prerequisites.** Check only evidence the next decision needs, including `needs:` before claiming. Skip a task with unmet or unverified dependencies only to select another authorized candidate. If none qualifies, report the wait. If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it. Interruption alone triggers no check.
 
-- **Process** - this block defines the csm workflow and record boundaries. They are mandatory while a session is active; correct conflicting workflow rules in memory or habit.
-- **Mandate** - the user determines the requirements and authorizes the work. Earlier authorization remains valid for unfinished work within its scope and phase.
-- **Records** - files preserve plans, user decisions, facts, and results. Code and runs can correct recorded facts; they cannot change a user decision or grant permission.
+   Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings.
 
-Resume an existing mandate after a restart or interruption. Open and Pending fix identify candidate tasks, not execution authorization. A request to execute the next eligible task permits selection from the board; a request about a named task stays with that task. If the authorization needed to continue cannot be established from the conversation or records, clarify it before proceeding.
-
-Within the authorized scope and phase, investigate, implement, test, fix defects, and correct facts as needed to complete the work, without per-step approval. Propose work beyond that boundary for the user to decide. Discovering a next step or taking a different role does not extend the mandate.
-
-Plan, execute, review, and opening a PR are separate phases. At the endpoint in the table, or an earlier limit the user sets, update the records and stop for user input before the next phase. A conditional instruction whose condition fails ends with the failure reported; do not repair the failure merely to activate that instruction. Leave the files sufficient to resume: results, remaining work, and the endpoint reached. If an unfinished mandate must survive an interruption, preserve its scope and phase in the task's Progress, or use the pre-task exception defined under state.md.
+   For an unknown, record the missing evidence in the consuming task's Open questions, pause dependent work, and continue independent authorized work. Report what is confirmed, what remains unknown or undone, and the next action when evidence limits progress. Report any conflict with a user requirement and retain the requirement until the user changes it.
+5. **Ownership.** Update only the relevant entries and distinguish proposals from user decisions. Coordinators maintain state.md, notes, scripts, and the board, create Scope, AC, and SOP, maintain dependencies, and write Review while normalizing Progress. Workers maintain their task file and board line, follow its SOP, and raise Open questions when stuck. Workers self-claim without assignment or tracking. Claims leave no board mark. Ask before claiming if there is real ownership ambiguity and leave others' work in place.
+6. **Endpoint.** Write the current result, verification, remaining work, and endpoint reached, then stop at the table's endpoint or an earlier user limit. Before entering another phase, obtain its authorization. Preserve the scope and phase of interrupted work in Progress, or in Context under the pre-task exception below. Factual corrections alone do not change board status.
 
 ### Requests and actions
 
@@ -43,13 +42,11 @@ Plan, execute, review, and opening a PR are separate phases. At the endpoint in 
 | Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. A request limited to changing the plan reopens submitted or Done work to Pending fix and ends; otherwise implement and verify the requested change | Revised plan recorded if that was the limit; otherwise the execution endpoint |
 | Authorize opening a PR after local review | Create the PR from the reviewed work and record its link in Progress | Link recorded |
 
-Pending review and Pending fix mark the handoffs prescribed above; internal fixes and self-checks within authorized execution do not create an additional handoff. Pending review is the stop for an unchecked diff or artifact. When there is nothing to check - the output is conclusions, a draft, or a record update - or the change rides the already-open PR of a task whose line is Done, place the line where the work stands instead: Done when complete, Pending fix or Open when execution remains. A user instruction that says where a line goes is the decision; from the sole reviewer it is also the verdict.
-
-Questions, reviews, and modifications belong to the task they concern. A new task requires the user's confirmation of a separate, independently reviewable deliverable. That confirmation is permission, never an obligation: writing notes, organizing knowledge, and updating records within existing scope happen directly in those records, without a board line. Classify PR feedback by what it requests using the same table; its source does not itself authorize a change. The same agent may serve different phases on the same task.
+Pending review and Pending fix are handoffs. Keep internal fixes and self-checks within execution. Submit unchecked work to Pending review. For conclusions, drafts, and record updates with nothing to check, or changes riding an already-open PR for a Done task, record the actual state instead: Done if complete, Pending fix or Open if execution remains. Follow the user's explicit status decision, which also serves as the verdict when the user is the sole reviewer.
 
 ### Records
 
-- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` states the session's mission and current problem focus. Make its opening paragraph useful on its own for readers of compact summaries such as `csm show`. Add short paragraphs when they help explain the mission or focus. A focus change changes the problem or scope being addressed; progress within that scope belongs in task records.
+- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` states the session's mission and current problem focus. Make its opening paragraph useful on its own for readers of compact summaries such as `csm show`. Add short paragraphs when they help explain the mission or focus. Replace superseded text in place. A focus change changes the problem or scope being addressed; progress within that scope belongs in task records.
 
   The coordinator maintains this session description. During execution of an existing task, record any needed correction to the description in that task's `Progress` for the coordinator to reconcile; leave `state.md` unchanged. Before the work has a task, `Context` may also hold one sentence preserving an unfinished mandate's scope and authorized phase; move that sentence to the task's `Progress` when the task is created.
 
@@ -57,28 +54,15 @@ Questions, reviews, and modifications belong to the task they concern. A new tas
 - `tasks/INDEX.md` - the task board. Status = section: **Open** / **Pending review** / **Pending fix** / **Done**. **Done** = complete under the endpoint rules above, including local review where required. PR creation, CI, approval, and merge are not prerequisites. Later code changes alone do not reopen a historical Done task; requested changes follow the table. Move a task's line between sections to change its status. Within a section, line order = execution order; ids are stable handles. A new task takes the next id and slots into its execution position. Replan by editing the board (reorder/insert/split/drop) - the board alone carries the plan.
 - `needs:` tail - the dependency mapping, and the only one: end the task's board line with `needs: 003` (this session) or `needs: api-contract/012` (another session), comma-separated when several - all must hold. No condition = the upstream reached local Done on its board; a `[condition]` names what else it owes (`[interface PR merged]`) and requires verified evidence, never assumed met. Record real preconditions only; refs must resolve without self-dependency or cycles. Reordering changes no `needs:`; dropping a task fixes or removes the refs pointing at it. Keep delivery evidence in the consuming task's Progress.
 - A board line - `<id> <slug>`, with the `needs:` tail last. The `[csm]` block renders the board by section, each task's head and `needs:` tail only; what a task is about lives in `tasks/<id>-<slug>.md`.
-- `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. `Progress` is the task's current outcome state, rewritten in place as the task advances: what changed, where (files, branch, commit, PR), the verification result, and what remains - never an append-only log, and never investigation, test-fixing, or CI-debugging steps. Status lives only in INDEX.
+- `tasks/<id>-<slug>.md` - one file per task, with Scope, AC, SOP, Open questions, Progress, Review. Give enough detail to execute and review without reconstructing the design; a simple fix may need only a one-line SOP. AC must be locally verifiable, never a PR, CI, or merge outcome. Fill Open questions when there is something to resolve. `Progress` is the task's current outcome state, rewritten in place as the task advances: what changed, where (files, branch, commit, PR), the verification result, and what remains - without duplicating git or logging investigation, test-fixing, or CI-debugging steps. Status lives only in INDEX.
 - `References:` / `View:` lines - optional header lines under the task file's title (omitted when unused): `References: <slug>[, <slug>]` names the `notes/` articles the task rests on (bare slugs resolving to `notes/<slug>.md`, the reading list for whoever executes or reviews), and `View: <id>-<slug>.html` points to an existing `views/<id>-<slug>.html` file. `References:` carries the why (design rationale, provenance, adjudications); the what stays in Scope/AC/SOP. Read-side only: a note you plan to write is prose in SOP. The coordinator sets references at task creation; a worker adds a reference they write or discover. Neither line gates claiming - the `needs:` tail owns gating.
 - `notes/` - focused deep-dive articles; `notes/INDEX.md` is the registry, one gist line per article describing the article alone. Which tasks rest on a note lives in those tasks' `References:`, so the registry never enumerates task ids.
 - `views/` - optional HTML pages for human readers. Create a view if the user requests one. Otherwise, use one at your discretion when it helps the reader understand the task. Planning, execution, and review can proceed without an optional view or an explanation for omitting it, including for logic changes. When creating one, use a self-contained `views/<id>-<slug>.html` file and add the task's `View:` header. Register the page in `views/INDEX.md` with a `### <id>-<slug>.html` heading and a one-line gist. If a shareable page is published, record its link in Progress alongside the file. Derive the page from the task and its notes. Notes remain authoritative where a view differs, and existing records can supply the facts without duplication. An existing view carries no routine maintenance duty. When using one for a current decision, check the claims that matter. Refresh any outdated claims or clearly mark the view as historical and base the decision on current records.
 - `scripts/` - shared utility scripts; `scripts/INDEX.md` is the registry.
 
-**Using evidence.** Resume the recorded plan within the mandate. When a record cannot support the current next step, check only the evidence that step needs; state what is confirmed, what remains, what is unknown, and the next action. Interruption alone triggers no check.
-
-Before relying on a recorded conclusion, check its premise, only as far as needed for the current decision. If it holds, use the conclusion. If it has changed, amend or explicitly supersede the conclusion in its original record and retain the evidence; do not create a conflicting note or invalidate the whole record. If it cannot be confirmed, put the specific unknown and evidence needed in the consuming task's Open questions; do not use the conclusion to justify dependent work. Continue other authorized work that does not depend on it. A changed file, new commit, or old note is a cue to check, never proof that a premise failed.
-
-When evidence contradicts a user requirement, report the discrepancy and retain the requirement until the user changes it. Correcting a factual record does not authorize a lifecycle transition; board moves follow the requested action in the table. Claims leave no board mark, so another worker's activity is unknowable: ask before claiming when there is real ambiguity, and leave work you did not do in place.
-
-**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions. Use the record destinations and update boundaries defined above. Within an updated `Context` or `Progress`, replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself. Keep outcomes and remaining work sufficient to resume, without duplicating git or narrating investigation, test, or CI steps. PR feedback and later changes still use the original task's records.
-
 **Record language.** Use English by default for new agent-authored csm prose and follow the user's language preference where it applies. Preserve existing record language during routine edits, keep quotations in the original, and retain proper names and identifiers such as task IDs, slugs, and filenames. Keep original wording where translation would lose meaning. Follow the user's language in replies. Language alone never blocks execution.
 
 **Project output.** Code, comments, branch names, commits, and PRs describe the project's behavior, technical rationale, and verification. Keep csm session identifiers, internal task IDs, workspace-note paths, and conversation attributions out of those artifacts. Explain decisions without requiring access to csm or the conversation. Record branch names, commit SHAs, and PR URLs in task Progress for traceability.
-
-**Record maintenance.** Roles describe these duties; they do not grant permission to enter a phase.
-
-- Coordinator - maintains state.md, notes, scripts, and the board; creates task Scope + AC + SOP, maintains dependencies, and writes Review. At review, normalize Progress to current outcome state. Workers self-claim; do not assign or track them.
-- Worker - maintains the task file and its board line. Under an execution mandate, select from the authorized Open or Pending fix tasks in board order, checking `needs:`. Skip unmet or unverified dependencies only to another task within that mandate; otherwise report the wait. Execute the SOP, record outcomes in Progress, and raise Open questions if stuck. Submit at the execution endpoint in the table.
 
 **Cross-repo:** the same session name in each repo shares one state.md + tasks/.
 
@@ -109,43 +93,37 @@ mod tests {
     }
 
     #[test]
-    fn csm_block_separates_process_mandate_and_records() {
+    fn csm_block_orders_turn_decisions_and_separates_authority_from_scope() {
         let block = csm_block("/home/user/.csm");
-        // The block opens with the turn boundary and the three-way split.
-        assert!(block.contains("### Turn boundary"));
+        let mut remainder = block
+            .split_once("### Turn decisions")
+            .expect("turn procedure")
+            .1
+            .split_once("### Requests and actions")
+            .expect("request table")
+            .0;
+        for step in [
+            "1. **Authority.**",
+            "2. **Scope.**",
+            "3. **Phase.**",
+            "4. **Prerequisites.**",
+            "5. **Ownership.**",
+            "6. **Endpoint.**",
+        ] {
+            remainder = remainder.split_once(step).expect(step).1;
+        }
+
+        assert!(block.contains("The user sets requirements and authorizes work."));
         assert!(block.contains(
-            "**Process** - this block defines the csm workflow and record boundaries. They are mandatory while a session is active; correct conflicting workflow rules in memory or habit."
-        ));
-        assert!(block.contains(
-            "**Mandate** - the user determines the requirements and authorizes the work."
-        ));
-        assert!(block.contains(
-            "Earlier authorization remains valid for unfinished work within its scope and phase."
+            "Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption."
         ));
         assert!(block
-            .contains("**Records** - files preserve plans, user decisions, facts, and results."));
-        // Facts are correctable; user decisions and permission are not.
+            .contains("Board status, facts, role, and newly discovered work confer no authority."));
+        assert!(block.contains("Clarify if the authority you need is missing."));
+        assert!(block.contains("A named-task request stays with that task."));
         assert!(block.contains(
-            "Code and runs can correct recorded facts; they cannot change a user decision or grant permission."
+            "A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order."
         ));
-        assert!(block.contains(
-            "Correcting a factual record does not authorize a lifecycle transition; board moves follow the requested action in the table."
-        ));
-        // Authorization comes from user requests, never from a board status.
-        assert!(block.contains(
-            "Open and Pending fix identify candidate tasks, not execution authorization."
-        ));
-        assert!(block.contains(
-            "A request to execute the next eligible task permits selection from the board"
-        ));
-        assert!(block.contains("a request about a named task stays with that task."));
-        assert!(block.contains("Resume an existing mandate after a restart or interruption."));
-        assert!(block.contains("clarify it before proceeding."));
-        // Discoveries and roles never extend the mandate.
-        assert!(block.contains(
-            "Discovering a next step or taking a different role does not extend the mandate."
-        ));
-        assert!(block.contains("Propose work beyond that boundary for the user to decide."));
     }
 
     #[test]
@@ -184,58 +162,47 @@ mod tests {
             "Revised plan recorded if that was the limit; otherwise the execution endpoint |"
         ));
         assert!(block.contains("record its link in Progress"));
-        // Routing: existing tasks, the new-task bar, PR feedback by content.
-        assert!(block
-            .contains("Questions, reviews, and modifications belong to the task they concern."));
+        assert!(block.contains("keep questions, reviews, and changes with the task they concern"));
         assert!(block.contains(
-            "A new task requires the user's confirmation of a separate, independently reviewable deliverable."
+            "Route PR feedback by what it requests and check authority as for any other request."
         ));
-        assert!(block.contains(
-            "Classify PR feedback by what it requests using the same table; its source does not itself authorize a change."
-        ));
-        assert!(block.contains("The same agent may serve different phases on the same task."));
     }
 
     #[test]
-    fn csm_block_defines_the_review_surface_and_the_task_gate() {
+    fn csm_block_defines_handoffs_and_the_task_gate() {
         let block = csm_block("/home/user/.csm");
-        // The paragraph under the table defines the review stop, its exceptions,
-        // and the user's authority over task status.
-        assert!(block.contains("Pending review is the stop for an unchecked diff or artifact."));
+        assert!(block.contains("Keep internal fixes and self-checks within execution."));
+        assert!(block.contains("Submit unchecked work to Pending review."));
         assert!(block.contains(
-            "or the change rides the already-open PR of a task whose line is Done, place the line where the work stands instead"
+            "For conclusions, drafts, and record updates with nothing to check, or changes riding an already-open PR for a Done task, record the actual state instead: Done if complete, Pending fix or Open if execution remains."
         ));
-        assert!(block.contains("place the line where the work stands instead"));
-        assert!(block.contains("A user instruction that says where a line goes is the decision"));
-        assert!(block.contains("from the sole reviewer it is also the verdict"));
-        // The new-task sentence is a permission gate, never an obligation:
-        // record maintenance is handled in the records, not on the board.
-        assert!(block.contains("That confirmation is permission, never an obligation"));
-        assert!(block.contains("without a board line"));
+        assert!(block.contains(
+            "Follow the user's explicit status decision, which also serves as the verdict when the user is the sole reviewer."
+        ));
+        assert!(block.contains(
+            "Create a new task only for a separate, independently reviewable deliverable the user has confirmed."
+        ));
+        assert!(block.contains("Maintain in-scope records directly without a new board line."));
     }
 
     #[test]
     fn csm_block_stops_phases_at_user_gates() {
         let block = csm_block("/home/user/.csm");
-        // Phases are separate and stop for user input at the table's endpoint.
-        assert!(block.contains("Plan, execute, review, and opening a PR are separate phases."));
         assert!(block.contains(
-            "At the endpoint in the table, or an earlier limit the user sets, update the records and stop for user input before the next phase."
+            "Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them."
         ));
-        // A failed condition is reported, never repaired to fire the instruction.
         assert!(block.contains(
-            "A conditional instruction whose condition fails ends with the failure reported"
+            "Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval."
         ));
-        assert!(block.contains("do not repair the failure merely to activate that instruction."));
-        // The stop leaves the files resumable, and mandates survive interruptions.
-        assert!(block.contains("Leave the files sufficient to resume: results, remaining work, and the endpoint reached."));
+        assert!(block.contains("Propose work beyond that boundary for a user decision."));
         assert!(block.contains(
-            "preserve its scope and phase in the task's Progress, or use the pre-task exception defined under state.md."
+            "Write the current result, verification, remaining work, and endpoint reached, then stop at the table's endpoint or an earlier user limit."
         ));
-        // Within the authorized scope, work is autonomous.
+        assert!(block.contains("Before entering another phase, obtain its authorization."));
         assert!(block.contains(
-            "Within the authorized scope and phase, investigate, implement, test, fix defects, and correct facts as needed to complete the work, without per-step approval."
+            "Preserve the scope and phase of interrupted work in Progress, or in Context under the pre-task exception below."
         ));
+        assert!(block.contains("Factual corrections alone do not change board status."));
     }
 
     #[test]
@@ -275,7 +242,7 @@ mod tests {
             "`Progress` is the task's current outcome state, rewritten in place as the task advances: what changed, where (files, branch, commit, PR), the verification result, and what remains"
         ));
         assert!(block.contains(
-            "never an append-only log, and never investigation, test-fixing, or CI-debugging steps."
+            "without duplicating git or logging investigation, test-fixing, or CI-debugging steps."
         ));
         assert!(block.contains("Status lives only in INDEX."));
         // Session bookkeeping stays internal; public artifacts explain the work.
@@ -377,76 +344,47 @@ mod tests {
     #[test]
     fn csm_block_gates_evidence_checks_on_need() {
         let block = csm_block("/home/user/.csm");
-        // The trigger is a record that cannot support the current next step,
-        // bounded to that step's evidence; interruption alone triggers nothing.
-        assert!(block.contains("**Using evidence.** Resume the recorded plan within the mandate."));
-        assert!(block.contains("When a record cannot support the current next step, check only the evidence that step needs"));
+        assert!(block.contains("Check only evidence the next decision needs"));
         assert!(block.contains(
-            "state what is confirmed, what remains, what is unknown, and the next action."
+            "If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it."
         ));
         assert!(block.contains("Interruption alone triggers no check."));
-        // Premise states: use, amend/supersede in place, or park the unknown.
-        assert!(block.contains("Before relying on a recorded conclusion, check its premise, only as far as needed for the current decision."));
-        assert!(block.contains("amend or explicitly supersede the conclusion in its original record and retain the evidence"));
-        assert!(block.contains("do not create a conflicting note or invalidate the whole record"));
+        assert!(block.contains("Before using a recorded conclusion, verify the relevant premise."));
+        assert!(block.contains("Changes or age are cues to check, not proof of failure."));
         assert!(block.contains(
-            "put the specific unknown and evidence needed in the consuming task's Open questions"
+            "Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings."
         ));
-        assert!(block.contains("Continue other authorized work that does not depend on it."));
-        assert!(block.contains("A changed file, new commit, or old note is a cue to check, never proof that a premise failed."));
-        // Evidence contradicting a user requirement is reported; the
-        // requirement stands until the user changes it.
         assert!(block.contains(
-            "When evidence contradicts a user requirement, report the discrepancy and retain the requirement until the user changes it."
+            "For an unknown, record the missing evidence in the consuming task's Open questions, pause dependent work, and continue independent authorized work."
         ));
-        // Concurrency: claims are invisible; ambiguity is a question.
-        assert!(block.contains("Claims leave no board mark"));
-        assert!(block.contains("ask before claiming when there is real ambiguity, and leave work you did not do in place."));
-        // No validity machinery rides along.
-        assert!(!block.contains("last verified"));
-        assert!(!block.contains("valid until"));
+        assert!(block.contains(
+            "Report what is confirmed, what remains unknown or undone, and the next action when evidence limits progress."
+        ));
+        assert!(block.contains(
+            "Report any conflict with a user requirement and retain the requirement until the user changes it."
+        ));
     }
 
     #[test]
-    fn csm_block_roles_maintain_records_without_granting_phases() {
+    fn csm_block_assigns_record_ownership() {
         let block = csm_block("/home/user/.csm");
-        // Roles are record-maintenance duties, not an authorization path.
         assert!(block.contains(
-            "**Record maintenance.** Roles describe these duties; they do not grant permission to enter a phase."
+            "Update only the relevant entries and distinguish proposals from user decisions."
         ));
-        assert!(block.contains("- Coordinator - maintains state.md, notes, scripts, and the board"));
+        assert!(block.contains(
+            "Coordinators maintain state.md, notes, scripts, and the board, create Scope, AC, and SOP, maintain dependencies, and write Review while normalizing Progress."
+        ));
         assert!(block.contains("The coordinator maintains this session description."));
-        assert!(block
-            .contains("creates task Scope + AC + SOP, maintains dependencies, and writes Review."));
-        assert!(block.contains("At review, normalize Progress to current outcome state."));
-        assert!(block.contains("Workers self-claim; do not assign or track them."));
-        assert!(block.contains("- Worker - maintains the task file and its board line."));
         assert!(block.contains(
-            "Execute the SOP, record outcomes in Progress, and raise Open questions if stuck."
+            "During execution of an existing task, record any needed correction to the description in that task's `Progress` for the coordinator to reconcile; leave `state.md` unchanged."
         ));
-        assert!(block.contains("Submit at the execution endpoint in the table."));
-        // The retired role/authorization framings stay retired.
-        assert!(!block.contains("Role follows action"));
-        assert!(!block.contains("Orchestrator"));
-        assert!(!block.contains("on different tasks"));
-        assert!(!block.contains("progress.md"));
-        // Writing records: what the next agent needs; the sync never skipped.
+        assert!(block.contains("Replace superseded text in place."));
         assert!(block.contains(
-            "**Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions."
+            "Workers maintain their task file and board line, follow its SOP, and raise Open questions when stuck. Workers self-claim without assignment or tracking."
         ));
-        // Routing is by action and content, and state.md is out of the task loop.
-        assert!(block.contains("Use the record destinations and update boundaries defined above."));
-        // An updated section reads as current state, not as an append log.
         assert!(block.contains(
-            "replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself"
+            "Claims leave no board mark. Ask before claiming if there is real ownership ambiguity and leave others' work in place."
         ));
-        assert!(block
-            .contains("without duplicating git or narrating investigation, test, or CI steps."));
-        assert!(!block.contains("When work or an agreed design changes, update the record that carries it: task Scope/Progress or state.md Context."));
-        assert!(
-            block.contains("PR feedback and later changes still use the original task's records.")
-        );
-        // Cross-repo and legacy semantics.
         assert!(block.contains(
             "**Cross-repo:** the same session name in each repo shares one state.md + tasks/."
         ));
@@ -471,8 +409,12 @@ mod tests {
         // The tail stays a mapping; the evidence lives in the consuming task.
         assert!(block.contains("Keep delivery evidence in the consuming task's Progress"));
         // Claim gate: selection is mandate-bounded and needs-checked.
-        assert!(block.contains("select from the authorized Open or Pending fix tasks in board order, checking `needs:`"));
-        assert!(block.contains("Skip unmet or unverified dependencies only to another task within that mandate; otherwise report the wait."));
+        assert!(block.contains(
+            "Check only evidence the next decision needs, including `needs:` before claiming."
+        ));
+        assert!(block.contains(
+            "Skip a task with unmet or unverified dependencies only to select another authorized candidate. If none qualifies, report the wait."
+        ));
         // The mapping remains valid when creating and replanning.
         assert!(block.contains("refs must resolve without self-dependency or cycles"));
         assert!(block.contains("requires verified evidence"));
