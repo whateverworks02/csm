@@ -35,7 +35,7 @@ struct Cli {
     /// Agent to launch (claude, pi, codex, opencode; default claude). May lead
     /// (`csm -a pi <name>`) or trail (`csm <name> -a pi`); without a session
     /// name, `csm -a <agent>` opens the picker for this directory.
-    #[arg(short = 'a', long = "agent", value_name = "AGENT")]
+    #[arg(short = 'a', long = "agent", value_name = "AGENT", global = true)]
     agent: Option<String>,
 
     #[command(subcommand)]
@@ -136,7 +136,10 @@ enum Cmd {
 #[derive(Subcommand)]
 enum SprintAction {
     /// Add an active session to the sprint.
-    Add { name: String },
+    Add {
+        /// Session name. Omit to pick an active session outside the sprint.
+        name: Option<String>,
+    },
     /// Remove a session from the sprint.
     Remove { name: String },
 }
@@ -581,6 +584,22 @@ fn cmd_list(archived: bool) -> Result<()> {
 fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
     match action {
         Some(SprintAction::Add { name }) => {
+            let name = if let Some(name) = name {
+                name
+            } else {
+                let idx = store::load_index()?;
+                let mut rows = list_rows(&idx, false);
+                rows.retain(|(_, meta)| !meta.in_sprint);
+                if rows.is_empty() {
+                    eprintln!("no active sessions to add to the sprint.");
+                    return Ok(());
+                }
+                let Some(name) = pick_session("sessions available to add to the sprint", &rows)?
+                else {
+                    return Ok(());
+                };
+                name
+            };
             store::set_in_sprint(&name, true)?;
             ui::done("added to sprint", &name);
         }
@@ -595,7 +614,7 @@ fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
                 .filter(|(_, meta)| meta.in_sprint)
                 .peekable();
             if rows.peek().is_none() {
-                eprintln!("no active sprint sessions. Add one with `csm sprint add <name>`.");
+                eprintln!("no active sprint sessions. Run `csm sprint add` to pick one.");
             }
             for (name, _) in rows {
                 println!("{}", ui::paint(ui::CYAN_BOLD, name));
@@ -967,6 +986,20 @@ mod tests {
             _ => panic!("expected external subcommand"),
         }
         assert!(cli.agent.is_none());
+    }
+
+    #[test]
+    fn shell_shortcut_agent_flag_parses_after_builtin_commands() {
+        let cli = Cli::try_parse_from(["csm", "list", "--archived", "-a", "codex"]).unwrap();
+        assert!(matches!(cli.command, Some(Cmd::List { archived: true })));
+
+        let cli = Cli::try_parse_from(["csm", "sprint", "add", "-a", "codex"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Cmd::Sprint {
+                action: Some(SprintAction::Add { name: None })
+            })
+        ));
     }
 
     #[test]
