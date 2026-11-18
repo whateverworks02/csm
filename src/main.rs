@@ -29,7 +29,7 @@ use std::io::Write;
     name = "csm",
     version,
     about = "Workspace memory for coding agents (cross-time, cross-repo)",
-    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks a local or cross-repo session."
+    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks a local or cross-repo session.\n\nIf the name matches a subcommand, put `--` before the name. For example, `csm -- sprint` launches the session named `sprint`. To choose an agent explicitly, use `csm -a codex -- sprint`."
 )]
 struct Cli {
     /// Agent to launch (claude, pi, codex, opencode; default claude). May lead
@@ -49,6 +49,12 @@ enum Cmd {
         /// List archived sessions instead of active ones.
         #[arg(long)]
         archived: bool,
+    },
+
+    /// Show the active sessions selected for the current sprint.
+    Sprint {
+        #[command(subcommand)]
+        action: Option<SprintAction>,
     },
 
     /// Pin a session so it is never garbage-collected.
@@ -127,6 +133,14 @@ enum Cmd {
     Other(Vec<String>),
 }
 
+#[derive(Subcommand)]
+enum SprintAction {
+    /// Add an active session to the sprint.
+    Add { name: String },
+    /// Remove a session from the sprint.
+    Remove { name: String },
+}
+
 fn main() {
     if let Err(e) = try_main() {
         ui::print_error(&e);
@@ -146,6 +160,7 @@ fn try_main() -> Result<()> {
             }
         }
         Some(Cmd::List { archived }) => cmd_list(archived),
+        Some(Cmd::Sprint { action }) => cmd_sprint(action),
         Some(Cmd::Pin { name }) => {
             store::set_pinned(&name, true)?;
             ui::done("pinned", &name);
@@ -563,6 +578,34 @@ fn cmd_list(archived: bool) -> Result<()> {
     Ok(())
 }
 
+fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
+    match action {
+        Some(SprintAction::Add { name }) => {
+            store::set_in_sprint(&name, true)?;
+            ui::done("added to sprint", &name);
+        }
+        Some(SprintAction::Remove { name }) => {
+            store::set_in_sprint(&name, false)?;
+            ui::done("removed from sprint", &name);
+        }
+        None => {
+            let idx = store::load_index()?;
+            let mut rows = list_rows(&idx, false)
+                .into_iter()
+                .filter(|(_, meta)| meta.in_sprint)
+                .peekable();
+            if rows.peek().is_none() {
+                eprintln!("no active sprint sessions. Add one with `csm sprint add <name>`.");
+            }
+            for (name, _) in rows {
+                println!("{}", ui::paint(ui::CYAN_BOLD, name));
+                card_multiline_row("context", &session_context_lines(name));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
     let meta = store::require_session(name)?;
     if meta.pinned && !force {
@@ -692,11 +735,7 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 
     // context - first paragraph of the Context section; the recognizer. (Falls
     // back to a legacy `## Task` section for pre-tasks-model sessions.)
-    let context_lines: Vec<String> = workspace::read_context_lines(&name, 5)
-        .into_iter()
-        .map(|l| markdown::truncate(&l, 100))
-        .collect();
-    card_multiline_row("context", &context_lines);
+    card_multiline_row("context", &session_context_lines(&name));
 
     // tasks - the board is the operational center, rendered as one block: the
     // summary bar, then every non-empty section under its own label. `claimable`
@@ -712,6 +751,13 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         card_row("claimable", &claimable);
     }
     Ok(())
+}
+
+fn session_context_lines(name: &str) -> Vec<String> {
+    workspace::read_context_lines(name, 5)
+        .into_iter()
+        .map(|line| markdown::truncate(&line, 100))
+        .collect()
 }
 
 /// The `tasks` block's lines, plus the `claimable` row's value. The block is
@@ -1025,6 +1071,7 @@ mod tests {
             last_access: last_access.into(),
             pinned: false,
             archived_at: archived_at.map(Into::into),
+            in_sprint: false,
         }
     }
 

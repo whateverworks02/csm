@@ -3,7 +3,7 @@
 //! Layout (`workspace::SCAFFOLD` is what the per-session part is created
 //! from, and is authoritative - this is a reading map, not a second list):
 //!   ~/.csm/
-//!     index.json          - session metadata, including origin and additional directories
+//!     index.json          - session metadata, including directories and sprint membership
 //!     sessions/<name>/
 //!       state.md
 //!       scripts/INDEX.md
@@ -35,6 +35,9 @@ pub struct SessionMeta {
     /// skipped by the daily surfaces and `gc`; naming one revives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<String>,
+    /// Whether the session was explicitly selected for the sprint.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_sprint: bool,
 }
 
 impl SessionMeta {
@@ -173,6 +176,7 @@ pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMe
             last_access: now_iso(),
             pinned: false,
             archived_at: None,
+            in_sprint: false,
         });
     let revived = meta.archived_at.take().is_some();
     meta.last_access = now_iso();
@@ -249,6 +253,26 @@ pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
         save_index(&idx)?;
     }
     Ok(changed)
+}
+
+/// Update sprint membership without changing the session's access or archive state.
+pub fn set_in_sprint(name: &str, in_sprint: bool) -> Result<()> {
+    let mut idx = load_index()?;
+    let meta = idx
+        .sessions
+        .get_mut(name)
+        .with_context(|| format!("no csm session named {:?}", name))?;
+    if in_sprint && meta.is_archived() {
+        anyhow::bail!(
+            "session {:?} is archived; unarchive it before adding it to the sprint",
+            name
+        );
+    }
+    if meta.in_sprint != in_sprint {
+        meta.in_sprint = in_sprint;
+        save_index(&idx)?;
+    }
+    Ok(())
 }
 
 /// Rename a session and re-point its `origin_pwd` to `new_origin_pwd`.
@@ -461,6 +485,7 @@ mod tests {
             last_access: "2026-10-01T00:00:00+00:00".into(),
             pinned: false,
             archived_at: None,
+            in_sprint: false,
         };
         let json = serde_json::to_string(&active).unwrap();
         assert!(!json.contains("archived_at"), "{json}");

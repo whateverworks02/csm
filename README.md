@@ -48,6 +48,8 @@ csm                          # pick a session for this directory
 
 Agents: `claude` (default), `pi`, `codex`, `opencode`. `-a` may lead or trail the name.
 
+If a session name matches a subcommand, put `--` before the name. Use `csm -- sprint` to launch the session named `sprint`. To choose an agent explicitly, use `csm -a codex -- sprint`.
+
 claude and codex revive the workspace on `/clear` and compaction, through the SessionStart hook `csm init` installs. pi and opencode are injected at launch only. codex skips untrusted hooks, so run `/hooks` in your first codex session and trust the `csm hook` entry.
 
 Shell shortcuts, for when you call one agent bare:
@@ -66,6 +68,8 @@ cso() { csm "$@" -a opencode; }
 | `csm <name>` | Start or resume a session and launch its agent (`claude` by default) |
 | `csm [-a <agent>]` | Pick a local session or browse sessions from other repositories |
 | `csm list [--archived]` | List active sessions (`--archived`: the archived ones) |
+| `csm sprint` | Show the selected active sessions and their Context |
+| `csm sprint add <name>` / `csm sprint remove <name>` | Add an active session to the sprint or remove a session from it |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
 | `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
 | `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
