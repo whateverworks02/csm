@@ -49,7 +49,7 @@ Questions, reviews, and modifications belong to the task they concern. A new tas
 
 ### Records
 
-- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` is one short block - at most 5 lines, no blank lines, so it fits `csm show`'s first-paragraph slice - stating the session's mission and current problem focus. A focus change changes the problem or scope being addressed; progress within that scope belongs in task records.
+- `state.md` - session one-pager with exactly two sections: `Context` and `Key links` (replace the scaffold comments when you write). `Context` states the session's mission and current problem focus. Make its opening paragraph useful on its own for readers of compact summaries such as `csm show`. Add short paragraphs when they help explain the mission or focus. A focus change changes the problem or scope being addressed; progress within that scope belongs in task records.
 
   The coordinator maintains this session description. During execution of an existing task, record any needed correction to the description in that task's `Progress` for the coordinator to reconcile; leave `state.md` unchanged. Before the work has a task, `Context` may also hold one sentence preserving an unfinished mandate's scope and authorized phase; move that sentence to the task's `Progress` when the task is created.
 
@@ -70,6 +70,8 @@ Before relying on a recorded conclusion, check its premise, only as far as neede
 When evidence contradicts a user requirement, report the discrepancy and retain the requirement until the user changes it. Correcting a factual record does not authorize a lifecycle transition; board moves follow the requested action in the table. Claims leave no board mark, so another worker's activity is unknowable: ask before claiming when there is real ambiguity, and leave work you did not do in place.
 
 **Writing records.** csm files are the durable working record. Update only the entries needed for the current request; preserve unrelated content and distinguish proposals from user decisions. Use the record destinations and update boundaries defined above. Within an updated `Context` or `Progress`, replace superseded statements in place so the text reads as current state, never a round-by-round log that contradicts or repeats itself. Keep outcomes and remaining work sufficient to resume, without duplicating git or narrating investigation, test, or CI steps. PR feedback and later changes still use the original task's records.
+
+**Record language.** Use English by default for new agent-authored csm prose and follow the user's language preference where it applies. Preserve existing record language during routine edits, keep quotations in the original, and retain proper names and identifiers such as task IDs, slugs, and filenames. Keep original wording where translation would lose meaning. Follow the user's language in replies. Language alone never blocks execution.
 
 **Project output.** Code, comments, branch names, commits, and PRs describe the project's behavior, technical rationale, and verification. Keep csm session identifiers, internal task IDs, workspace-note paths, and conversation attributions out of those artifacts. Explain decisions without requiring access to csm or the conversation. Record branch names, commit SHAs, and PR URLs in task Progress for traceability.
 
@@ -287,12 +289,10 @@ mod tests {
             "Record branch names, commit SHAs, and PR URLs in task Progress for traceability."
         ));
         assert!(!block.contains("Reference the name in commits/PRs"));
-        // state.md: exactly two sections, a card-sized Context block rewritten
-        // in place, and a closed exclusion list.
+        // state.md keeps two sections and a self-contained opening summary.
         assert!(block.contains("exactly two sections: `Context` and `Key links`"));
-        assert!(block.contains(
-            "at most 5 lines, no blank lines, so it fits `csm show`'s first-paragraph slice"
-        ));
+        assert!(block.contains("Make its opening paragraph useful on its own"));
+        assert!(block.contains("Add short paragraphs when they help explain the mission or focus"));
         assert!(block.contains(
             "A focus change changes the problem or scope being addressed; progress within that scope belongs in task records."
         ));
