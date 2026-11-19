@@ -1,173 +1,63 @@
 # csm
 
-**Workspace memory for coding agents - session-scoped, cross-repo, multi-agent.**
-
-[![CI](https://github.com/whateverworks02/csm/actions/workflows/ci.yml/badge.svg)](https://github.com/whateverworks02/csm/actions/workflows/ci.yml)
-[![latest release](https://img.shields.io/github/v/release/whateverworks02/csm)](https://github.com/whateverworks02/csm/releases)
-[![license: MIT](https://img.shields.io/github/license/whateverworks02/csm)](LICENSE)
-![platform: macOS arm64](https://img.shields.io/badge/platform-macOS%20arm64-lightgrey)
-
-`csm <name>` gives each task a durable directory of plans, decisions, and results, injected into the agent on launch. The records, not the chat transcript, are the state.
-
-- **Sessions as directories** - plain Markdown files on disk, readable and editable without csm.
-- **Any agent, any time** - claude, pi, codex, and opencode read the same workspace; switch agents mid-task.
-- **Cross-repo** - one session spans repositories, and a task can depend on another session's board.
-- **A real task board** - a task's status is the section its line sits in, with dependencies on the same line.
-- **Automatic recall** - injected on launch, and revived on `/clear` for claude and codex.
-- **User-gated execution** - the board proposes work; your request authorizes it.
-
-The authoritative rules live in the prompt `csm init` writes into each agent's instruction file (`~/.claude/CLAUDE.md` for claude); this page is the human-facing summary.
+csm gives coding agents a shared memory for a project. Start a named session,
+then pick up its plan, task board, and notes in another agent or repository.
+The workspace is plain Markdown on disk.
 
 ## Install
 
-macOS (Apple Silicon):
+The [latest release](https://github.com/whateverworks02/csm/releases/latest)
+has a prebuilt binary for Apple Silicon Macs.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/whateverworks02/csm/main/install.sh | bash
 ```
 
-Installs to `~/.local/bin` (add it to `PATH` if prompted), then runs `csm init` and `csm doctor`.
+The installer sets up agent instructions and hooks. Add `~/.local/bin` to
+your `PATH` if prompted.
 
-From source (any platform with Rust):
+You can also build from a local clone with Cargo.
 
 ```sh
-cargo install --path .
+cargo install --path . --locked
 csm init
 ```
 
-Linux and Intel macOS builds aren't published yet.
+## Quick start
 
-## Quickstart
-
-```sh
-cd ~/proj/my-task
-csm my-task                  # create or resume "my-task", launch claude
-csm my-task -a codex         # same session, launch codex
-csm                          # pick a session for this directory
-```
-
-Agents: `claude` (default), `pi`, `codex`, `opencode`. `-a` may lead or trail the name.
-
-If a session name matches a subcommand, put `--` before the name. Use `csm -- sprint` to launch the session named `sprint`. To choose an agent explicitly, use `csm -a codex -- sprint`.
-
-claude and codex revive the workspace on `/clear` and compaction, through the SessionStart hook `csm init` installs. pi and opencode are injected at launch only. codex skips untrusted hooks, so run `/hooks` in your first codex session and trust the `csm hook` entry.
-
-Shell shortcuts, for when you call one agent bare:
+Run csm from your project directory with your agent’s CLI on `PATH`.
 
 ```sh
-# ~/.zshrc
-csp() { csm "$@" -a pi; }
-csx() { csm "$@" -a codex; }
-cso() { csm "$@" -a opencode; }
+csm search                   # Start or reopen “search” in Claude Code
+csm search -a codex          # Open the same workspace in Codex
+csm show search              # See the session context and task board
+csm                          # Pick a session, including from another repo
 ```
 
-## Commands
+Use `-a` to select `claude` (the default), `codex`, `pi`, or `opencode`.
+In Codex, run `/hooks` and trust the `csm hook` entry to load session context.
+Run `csm --help` for all commands.
 
-| Command | What it does |
-| --- | --- |
-| `csm <name>` | Start or resume a session and launch its agent (`claude` by default) |
-| `csm [-a <agent>]` | Pick a local session or browse sessions from other repositories |
-| `csm list [--archived]` | List active sessions (`--archived`: the archived ones) |
-| `csm sprint` | Show the selected active sessions and their Context |
-| `csm sprint add [name]` | Add an active session to the sprint, or omit the name to pick from eligible sessions |
-| `csm sprint remove <name>` | Remove a session from the sprint |
-| `csm show [name]` | Compact card: origin, context, task board, what's claimable |
-| `csm init` | (Re)install the SessionStart hooks and the working-mode prompt |
-| `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
-| `csm archive <name>` / `csm unarchive <name>` | Retain a session off the daily surfaces / return it to them |
-| `csm rename <old> <new>` | Rename and re-home to the current directory |
-| `csm rm <name>` | Delete a session and its workspace (`-f` for a pinned one) |
-| `csm gc [--older-than N]` | Collect unpinned, unarchived sessions (unfinished boards are kept) |
-| `csm doctor [--fix]` | Diagnose consistency and agent wiring; `--fix` repairs consistency |
+## What carries over
 
-`show` defaults to `$CSM_SESSION`, else opens a picker.
+Each session lives in `~/.csm/sessions/<name>/` by default. On launch, the
+agent gets a snapshot of `state.md` and the board in `tasks/INDEX.md`.
+Agents update the Markdown files as they work. Detailed task records live
+in `tasks/`, and decisions that span tasks can go in `notes/`.
 
-When you pick a session from another repository, the agent launches in your current directory. Choose “register and launch” to make the same session appear in this directory's local list on future launches.
-
-## The workspace
-
-Each session is a directory at `~/.csm/sessions/<name>/` (set `CSM_HOME` to move the data root):
-
-```text
-<name>/
-├── state.md
-├── tasks/
-│   ├── INDEX.md
-│   └── <id>-<slug>.md
-├── notes/
-├── views/
-└── scripts/
-```
-
-| Path | Holds |
-| --- | --- |
-| `state.md` | The session one-pager: `Context` (what this session is and why) and `Key links`. |
-| `tasks/INDEX.md` | The board. A task's status is the section its line is in: `Open` -> `Pending review` -> `Pending fix` -> `Done`. Line order within a section is execution order. |
-| `tasks/<id>-<slug>.md` | One file per task: `Scope`, `AC`, `SOP`, `Open questions`, `Progress`, `Review` - sized to the work, not to the template. |
-| `notes/` | Deep-dive articles that outlive a task, entered through `notes/INDEX.md`. |
-| `views/` | Optional self-contained HTML task pages for readers, required when requested. Each page is listed in `views/INDEX.md` and linked from the task's `View:` header. |
-| `scripts/` | Shared utility scripts, entered through `scripts/INDEX.md`. |
-
-`state.md` and `tasks/INDEX.md` are injected into the agent on launch - they are the orientation surface. The rest is read on demand.
-
-### Dependencies
-
-A task's preconditions ride on its board line as a `needs:` tail, the only dependency mapping:
-
-```text
-## Open
-- 002 api needs: 001
-- 003 frontend needs: 001
-- 004 integration needs: 002, 003
-- 005 docs
-```
-
-`needs: <id>` names a task in this session; `needs: <session>/<id>` names another session's board, for work that spans repos. Several refs are comma-separated, and all must hold.
-
-No condition means the upstream's task reached `Done` on its board. A bracketed condition - `needs: api-contract/012 [interface PR merged]` - names what else it owes, and is never assumed met.
-
-## The task lifecycle
-
-The board identifies candidate work; it does not authorize execution. The user's request sets the mandate and its endpoint, and the agent stops there for the next decision:
-
-1. **Create** - write the task file with `Scope`, `AC`, and `SOP`; add its line to `Open` with any `needs:` tail.
-2. **Claim and execute** - pick a startable task from `Open` or `Pending fix`, run the `SOP`, record outcomes in `Progress`.
-3. **Submit** - move the line to `Pending review`, done or stuck.
-4. **Review** - approve to `Done`, or write `Review` and return the task to `Pending fix`.
-
-A plan request ends once the plan is recorded, execution ends at `Pending review`, review ends with a verdict, and opening a PR is a separate authorization after local review.
-
-`Done` means the local loop closed - executed and reviewed locally. PR creation, CI, approval, and merge are not part of it, and a later code change alone does not reopen a historical `Done` task. `AC` is always verifiable in the local loop, never as a PR or CI outcome.
-
-## Reading the plan
-
-`csm show` renders the board by its own sections, in board order, with each task's `needs:` hanging below it - the plan on screen is the plan the agents read:
-
-```text
-  tasks       [███████░░░░░░░░░░░░░] 2/6 done
-              Open
-              ├── ○ 002 eval-grader
-              │   └── ✓ 001 eval-runner
-              ├── ○ 003 incident-corpus
-              │   └── ○ 002 eval-grader
-              ├── ○ 004 judge-layer ◆
-              │   └── ○ 002 eval-grader
-              └── ○ 005 baseline-and-gate
-                  ├── ○ 003 incident-corpus
-                  └── ○ 004 judge-layer ◆
-              Done
-              001 eval-runner
-              006 prompt-surface-patch
-  claimable   002
-```
-
-Marks: `○` open, `◐` pending review, `◑` pending fix, `✓` done, `◆` the task has a view, `(unverified)` a `[condition]` whose evidence isn't recorded, `(missing)` an unresolvable ref. `claimable` lists what can be started now; `Done` caps its list and folds the rest into `… +K more`.
+Ask the agent to record a plan, execute an agreed task, or review submitted
+work. Your request determines which step it takes. The board can track
+dependencies between tasks in the same session or across sessions.
 
 ## Upgrading
 
-Run `csm init` to refresh the prompt and hooks. Update any personal instructions that treated board status as execution authorization. See [The task lifecycle](#the-task-lifecycle).
+Run `csm init` to refresh agent instructions and hooks. If your own
+instructions tell agents to start tasks automatically from board status,
+update them to require an explicit execution request.
 
-To remove the retired skills, run the commands below. If you moved your csm home, use the old path for `csm_legacy_home`.
+If an older version installed `csm-plan` and `csm-scout`, remove their
+files with the commands below. Set `csm_legacy_home` to the previous csm
+data directory if it has moved.
 
 ```sh
 csm_legacy_home=${CSM_HOME:-"$HOME/.csm"}
@@ -178,4 +68,4 @@ rm -f "$csm_legacy_home/skills/plan.md" "$csm_legacy_home/skills/scout.md"
 
 ## License
 
-MIT
+[MIT](LICENSE)
