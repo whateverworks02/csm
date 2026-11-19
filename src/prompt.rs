@@ -20,6 +20,8 @@ A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and
 
 ### Turn decisions
 
+Before acting, identify the work concerned, the action the user requested, and its endpoint.
+
 1. **Authority.** Follow this workflow while the session is active and correct conflicting workflow rules in memory or habit. The user sets requirements and authorizes work. Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption. Board status, facts, role, and newly discovered work confer no authority. Clarify if the authority you need is missing.
 2. **Scope.** Identify the requested outcome and keep questions, reviews, and changes with the task they concern. Classify PR feedback by what it requests. Its source alone cannot authorize a change. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
 3. **Phase.** Use the table to identify the authorized action. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
