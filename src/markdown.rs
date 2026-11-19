@@ -1,14 +1,4 @@
-//! Markdown text utilities: section parsing (`sections`, `strip_inline`) and
-//! display truncation (`truncate`).
-//!
-//! `sections` splits a document into `## `-headed sections with inline markers
-//! stripped; it is the single scanner the workspace readers (`parse_tasks_board`,
-//! `read_context_lines`) share. `truncate` caps a line for the `csm show` card.
-//! No styling here (that lives in `ui`), no Unicode glyphs - plain text that
-//! `cmd_show` wraps in cargo-style color.
-
-/// Strip inline markdown markers from `text`, returning plain text. Unmatched
-/// markers (e.g. a lone `*`) are left literal.
+/// Strip inline markers while leaving unmatched markers literal.
 pub fn strip_inline(input: &str) -> String {
     let mut out = String::new();
     let mut i = 0;
@@ -28,9 +18,7 @@ pub fn strip_inline(input: &str) -> String {
                 continue;
             }
         }
-        // *italic* - only when followed by a non-space, non-`*` char (avoids
-        // `**bold**`, bullet-like `* `, stray `*` in prose). Must run after the
-        // `**` branch so bold is matched first.
+        // Match bold first and leave bullet markers literal.
         if let Some(after) = rest.strip_prefix('*') {
             let ok = after
                 .as_bytes()
@@ -59,14 +47,12 @@ pub fn strip_inline(input: &str) -> String {
             }
         }
         if let Some(after) = rest.strip_prefix('[') {
-            // [text](url)
             if let Some(close) = after.find(']') {
                 let text = &after[..close];
                 let after_close = &after[close + 1..];
                 if let Some(url_body) = after_close.strip_prefix('(') {
                     if let Some(paren_close) = url_body.find(')') {
                         out.push_str(text);
-                        // consumed: '[' + text + ']' + '(' + url + ')' = close + paren_close + 4
                         i += close + paren_close + 4;
                         continue;
                     }
@@ -74,7 +60,6 @@ pub fn strip_inline(input: &str) -> String {
             }
         }
 
-        // copy one char (keeps `i` on a UTF-8 boundary)
         let ch = rest.chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();
@@ -82,37 +67,22 @@ pub fn strip_inline(input: &str) -> String {
     out
 }
 
-/// Truncate `s` to at most `max` chars (by char count). If it's longer, cut at
-/// the last whitespace within the window (avoids mid-word cuts) and append `…`.
+/// Limit text by character count, preferring a word boundary before the ellipsis.
 pub fn truncate(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
+    let Some((end, _)) = s.char_indices().nth(max) else {
         return s.to_string();
-    }
-    let window: String = chars[..max].iter().collect();
-    let cut_chars = match window.rfind(char::is_whitespace) {
-        Some(byte_idx) => window[..byte_idx].chars().count(),
-        None => max,
     };
-    let mut t: String = chars[..cut_chars].iter().collect();
-    t.push('…');
-    t
+    let window = &s[..end];
+    let cut = window.rfind(char::is_whitespace).unwrap_or(end);
+    format!("{}…", &s[..cut])
 }
 
-/// A `## Section` of a state.md: its title (text after `## `) and the body
-/// lines under it, each with inline markdown stripped. The H1 title and `>`
-/// quote boilerplate before the first section are dropped; genuine blank lines
-/// are kept as paragraph breaks.
 pub struct Section {
     pub title: String,
     pub body: Vec<String>,
 }
 
-/// Split a markdown document into `## `-headed sections. Each section's body is
-/// inline-stripped (so `**x**` reads as `x`) with leading/trailing blank lines
-/// trimmed; markup-only lines (e.g. HTML comments) are dropped. Sub-structure
-/// (list markers, checkboxes, `###` sub-headings) is preserved as text. Returns
-/// sections in document order; an empty vec means no `## ` headings at all.
+/// Split on level-two headings and strip inline markup from each section.
 pub fn sections(content: &str) -> Vec<Section> {
     let mut out = Vec::new();
     let mut cur: Option<Section> = None;
@@ -127,9 +97,6 @@ pub fn sections(content: &str) -> Vec<Section> {
             });
             continue;
         }
-        // Before the first section: drop the H1 and `>` boilerplate. Inside a
-        // section: keep genuine blank lines as paragraph breaks, drop
-        // markup-only lines, inline-strip the rest.
         let Some(s) = cur.as_mut() else {
             continue;
         };
@@ -148,13 +115,10 @@ pub fn sections(content: &str) -> Vec<Section> {
     out
 }
 
-/// Trim leading/trailing blank lines from a section's body so a section whose
-/// only "content" was a comment or whitespace renders as `(none)`.
 fn trim_section(mut s: Section) -> Section {
-    while s.body.first().is_some_and(|l| l.is_empty()) {
-        s.body.remove(0);
-    }
-    while s.body.last().is_some_and(|l| l.is_empty()) {
+    let first = s.body.iter().take_while(|line| line.is_empty()).count();
+    s.body.drain(..first);
+    while s.body.last().is_some_and(|line| line.is_empty()) {
         s.body.pop();
     }
     s
@@ -190,8 +154,6 @@ mod tests {
         #[test]
         fn html_comment_removed() {
             assert_eq!(strip_inline("a<!-- comment -->b"), "ab");
-            // Unterminated comment falls through: "<!--" has no "-->" so the
-            // marker chars are copied literally.
             assert_eq!(strip_inline("<!-- no close"), "<!-- no close");
         }
 
@@ -199,13 +161,11 @@ mod tests {
         fn unmatched_markers_kept_literal() {
             assert_eq!(strip_inline("**"), "**");
             assert_eq!(strip_inline("*stray*"), "stray");
-            // A bullet-like "* " is not italic (next char is a space).
             assert_eq!(strip_inline("* item"), "* item");
         }
 
         #[test]
         fn multibyte_safe() {
-            // Byte-offset markers must land on UTF-8 boundaries.
             assert_eq!(strip_inline("**café**"), "café");
             assert_eq!(strip_inline("[[naïve]]"), "naïve");
         }
@@ -223,22 +183,17 @@ mod tests {
 
         #[test]
         fn over_length_cuts_at_word_boundary() {
-            // "ab cd" -> last whitespace at byte 2 -> "ab…"
             assert_eq!(truncate("ab cdef", 5), "ab…");
-            // No whitespace in the window -> hard cut at max.
             assert_eq!(truncate("abcdef", 5), "abcde…");
         }
 
         #[test]
         fn counts_chars_not_bytes() {
-            // 6 chars, max 3 -> cut to 3 chars (would be 12 bytes if byte-counted).
             assert_eq!(truncate("Ελλάδα", 3), "Ελλ…");
         }
 
         #[test]
         fn max_zero_yields_just_ellipsis() {
-            // Characterizing current behavior: empty window, no whitespace, so
-            // cut_chars == 0 and only the ellipsis is appended.
             assert_eq!(truncate("abc", 0), "…");
         }
     }
@@ -279,8 +234,6 @@ mod tests {
         #[test]
         fn leading_trailing_blanks_trimmed_internal_kept() {
             let s = sections("## A\n\n\npara1\n\npara2\n\n");
-            // Leading/trailing blank lines removed; the break between para1 and
-            // para2 is preserved as an empty body line.
             assert_eq!(s[0].body, vec!["para1", "", "para2"]);
         }
 

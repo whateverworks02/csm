@@ -1,13 +1,4 @@
-//! Garbage collection for unpinned sessions. Pinned and archived sessions are
-//! never listed or deleted by gc. Deletion is a hard delete (workspace dir +
-//! index entry).
-//!
-//! Guardrail (task 012): a candidate whose board still holds non-Done tasks is
-//! never collected - the board is the only record of that work, and a hard
-//! delete leaves nothing behind to check. Those sessions are listed in their
-//! own block with their unfinished count, and both bulk paths (`--yes`,
-//! interactive `a`) draw only from the collectable list; deleting a kept
-//! session is a deliberate act outside gc (`csm rm <name>`).
+//! Delete unpinned, active sessions whose boards have no unfinished tasks.
 
 use crate::store::{self, SessionMeta};
 use crate::ui;
@@ -15,11 +6,9 @@ use crate::workspace;
 use anyhow::Result;
 use chrono::Local;
 
-/// One gc candidate: index metadata plus the count of board tasks not yet
-/// Done.
-struct Candidate {
-    name: String,
-    meta: SessionMeta,
+struct Candidate<'a> {
+    name: &'a str,
+    meta: &'a SessionMeta,
     unfinished: usize,
 }
 
@@ -39,8 +28,8 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
             })
         })
         .map(|(k, v)| Candidate {
-            name: k.clone(),
-            meta: v.clone(),
+            name: k,
+            meta: v,
             unfinished: unfinished_tasks(k),
         })
         .collect();
@@ -57,8 +46,6 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let (kept, deletable): (Vec<Candidate>, Vec<Candidate>) =
         candidates.into_iter().partition(|c| c.unfinished > 0);
 
-    // The kept block leads: it explains why those sessions are absent from the
-    // list and prompt that follow.
     if !kept.is_empty() {
         eprintln!(
             "{}",
@@ -140,8 +127,6 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Board tasks not yet Done for `name`; 0 when the session has no board (a
-/// ghost or a pre-tasks-model session).
 fn unfinished_tasks(name: &str) -> usize {
     workspace::read_tasks_board(name)
         .map(|b| b.unfinished_count())
@@ -149,38 +134,28 @@ fn unfinished_tasks(name: &str) -> usize {
 }
 
 fn names(rows: &[Candidate]) -> Vec<String> {
-    rows.iter().map(|c| c.name.clone()).collect()
+    rows.iter().map(|c| c.name.to_owned()).collect()
 }
 
-/// Resolve the interactive selection line against `rows`, the collectable
-/// names the caller passes - a kept session is absent from them, so `a` and
-/// every index have no handle on it: the guardrail is not a confirmation the
-/// user can wave through.
+/// Resolve selection indices against the collectable sessions only.
 fn select_from_line(line: &str, rows: &[String]) -> Vec<String> {
     if line.eq_ignore_ascii_case("a") {
         return rows.to_vec();
     }
-    let mut out = Vec::new();
-    for part in line.split(',') {
-        let part = part.trim();
-        if let Ok(i) = part.parse::<usize>() {
-            if i >= 1 && i <= rows.len() {
-                out.push(rows[i - 1].clone());
-            }
-        }
-    }
-    out
+    line.split(',')
+        .filter_map(|part| part.trim().parse::<usize>().ok())
+        .filter_map(|index| index.checked_sub(1).and_then(|index| rows.get(index)))
+        .cloned()
+        .collect()
 }
 
-/// The collectable list: numbered rows, the numbers being the selection
-/// handles for `a` and index selection.
 fn print_collectable(rows: &[Candidate]) {
     for (i, c) in rows.iter().enumerate() {
         eprintln!(
             "{}",
             ui::session_row(
                 Some(i + 1),
-                &c.name,
+                c.name,
                 &store::format_ts(&c.meta.last_access),
                 &c.meta.origin_pwd,
                 ""
@@ -189,8 +164,6 @@ fn print_collectable(rows: &[Candidate]) {
     }
 }
 
-/// The kept block: no index column, so a kept session can't be mistaken for a
-/// selectable row; its unfinished count is the trailing marker.
 fn print_kept(rows: &[Candidate]) {
     for c in rows {
         let marker = format!(
@@ -201,7 +174,7 @@ fn print_kept(rows: &[Candidate]) {
             "{}",
             ui::session_row(
                 None,
-                &c.name,
+                c.name,
                 &store::format_ts(&c.meta.last_access),
                 &c.meta.origin_pwd,
                 &marker
@@ -216,8 +189,6 @@ mod tests {
     use crate::test_support::{scaffold_session, with_csm_home, write_board};
     use serial_test::serial;
 
-    /// Set `name`'s `last_access` to `days_ago` days before now, as RFC3339
-    /// (what `now_iso` writes and `parse_time` reads). `last_access` is `pub`.
     fn backdate(name: &str, days_ago: i64) {
         let ts = (Local::now() - chrono::Duration::days(days_ago)).to_rfc3339();
         store::set_last_access(name, ts).unwrap();
@@ -229,16 +200,13 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// `run(Some(d), true)` is the stdin-free path: `yes=true` short-circuits
-    /// `ui::confirm`. (`run(None, _)` always reads stdin for index selection ->
-    /// not testable without a stdin seam; out of scope.)
     #[test]
     #[serial]
     fn deletes_unpinned_older_than_threshold_and_keeps_recent() {
         with_csm_home(|_dir| {
             scaffold_session("old");
             backdate("old", 10);
-            scaffold_session("recent"); // last_access = now
+            scaffold_session("recent");
             run(Some(5), true).unwrap();
             assert!(!dir_exists("old"), "old unpinned session should be gc'd");
             assert!(dir_exists("recent"), "recent session should be kept");
@@ -263,8 +231,6 @@ mod tests {
         });
     }
 
-    /// Archive promises quiet retention: even an old, unpinned session with an
-    /// all-Done board (which gc would otherwise collect) is never a candidate.
     #[test]
     #[serial]
     fn skips_archived_sessions() {
@@ -301,7 +267,6 @@ mod tests {
     #[serial]
     fn no_unpinned_candidates_is_noop() {
         with_csm_home(|_dir| {
-            // Only a pinned session -> no candidates -> early no-op.
             scaffold_session("kept");
             store::set_pinned("kept", true).unwrap();
             run(Some(1), true).unwrap();
@@ -310,10 +275,6 @@ mod tests {
         });
     }
 
-    // --- the guardrail (task 012) ---
-
-    /// `--yes` is the bulk path: it must not carry a session whose board still
-    /// holds live tasks, while an empty board in the same run still goes.
     #[test]
     #[serial]
     fn keeps_sessions_with_unfinished_tasks_under_yes() {
@@ -325,7 +286,7 @@ mod tests {
                  ## Done\n- 000 old\n",
             );
             backdate("busy", 10);
-            scaffold_session("idle"); // fresh scaffold: empty board
+            scaffold_session("idle");
             backdate("idle", 10);
             run(Some(5), true).unwrap();
             assert!(dir_exists("busy"), "unfinished tasks keep the session");
@@ -378,8 +339,6 @@ mod tests {
         });
     }
 
-    /// Interactive `a` and indices resolve against the collectable names
-    /// `run` passes, so a kept session has no handle to be selected by.
     #[test]
     fn selection_resolves_only_the_given_rows() {
         let rows = vec!["a".to_string(), "b".to_string()];

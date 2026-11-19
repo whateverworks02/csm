@@ -1,26 +1,9 @@
-//! Terminal styling for csm's user-facing output.
-//!
-//! Built on `anstyle` (already in the dep tree via clap). Stream-aware:
-//! `paint` targets stdout (display commands), `epaint` targets stderr (status
-//! and diagnostics). Both honor `NO_COLOR` / `CLICOLOR_FORCE` and isatty, so
-//! color is stripped when piped - keeping the hook's JSON output clean. The
-//! hook uses raw `println!` anyway and never calls these helpers.
-//!
-//! Aesthetic: cargo-like restraint. Color, not icons - no checkmarks, stars,
-//! or bullets. One exception: the `csm show` tasks block, whose dependency
-//! forest follows the `cargo tree` lineage and uses box-drawing connectors
-//! plus status glyphs (see `needs.rs`). Verbs and labels carry the meaning;
-//! paths and timestamps recede (dim, `~`-abbreviated). Errors use cargo's
-//! red `error:` prefix.
-
 use anyhow::Result;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::sync::OnceLock;
 
 use anstyle::{AnsiColor, Color, Style};
-
-// --- Styles -----------------------------------------------------------------
 
 pub const BOLD: Style = Style::new().bold();
 pub const DIM: Style = Style::new().dimmed();
@@ -41,39 +24,21 @@ pub const YELLOW_BOLD: Style = Style::new()
     .bold()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 
-/// ASCII arrow for transformations (rename) and hints. Plain text, not an icon.
 pub const ARROW: &str = "->";
-/// ASCII marker for pinned sessions in tables. Plain text, not an icon.
 pub const PIN_MARK: &str = "*";
 
-/// Status glyphs for the `csm show` tasks block's dependency forest. Shape
-/// carries the status without color (NO_COLOR-safe); color is added by the
-/// caller. Not used anywhere else - the rest of csm output stays
-/// color-not-icons.
 pub const T_OPEN: &str = "○";
 pub const T_REVIEW: &str = "◐";
 pub const T_FIX: &str = "◑";
 pub const T_DONE: &str = "✓";
-/// A `needs:` ref the boards cannot resolve (missing id / unknown session).
 pub const T_UNKNOWN: &str = "?";
-/// A broken relation: self-need or an unparseable tail.
 pub const T_ALERT: &str = "!";
-/// A task that has a view: the human-facing page at `views/<id>-<slug>.html`.
-/// A solid diamond (U+25C6) - the card's one filled shape. The hollow cut
-/// (`◇`) came first, on the reasoning that a filled shape reads as a piece of
-/// the forest drawn wrong; the session owner overruled it and the hollow
-/// rationale is kept only as superseded. Painted by `needs::view_mark`, which
-/// owns where it rides.
 pub const T_VIEW: &str = "◆";
-
-// --- Color gate (per stream) ------------------------------------------------
 
 static STDOUT_COLOR: OnceLock<bool> = OnceLock::new();
 static STDERR_COLOR: OnceLock<bool> = OnceLock::new();
 
-/// Decide color for a stream from the env + tty. Follows `CLICOLOR_FORCE` / `NO_COLOR`:
-/// `NO_COLOR` (any value) disables; `CLICOLOR_FORCE` (non-zero) forces on;
-/// otherwise color iff the stream is a terminal.
+/// `NO_COLOR` takes precedence over `CLICOLOR_FORCE` and terminal detection.
 fn want_color(is_tty: bool) -> bool {
     if std::env::var_os("NO_COLOR").is_some() {
         return false;
@@ -94,62 +59,48 @@ fn stderr_color() -> bool {
     *STDERR_COLOR.get_or_init(|| want_color(std::io::stderr().is_terminal()))
 }
 
-/// Wrap `text` in `style` for stdout (display). No-op when color is off.
 pub fn paint(style: Style, text: &str) -> String {
-    if stdout_color() {
-        format!("{}{}{}", style.render(), text, style.render_reset())
-    } else {
-        text.to_string()
-    }
+    render(style, text, stdout_color())
 }
 
-/// Wrap `text` in `style` for stderr (status / diagnostics). No-op when off.
 pub fn epaint(style: Style, text: &str) -> String {
-    if stderr_color() {
+    render(style, text, stderr_color())
+}
+
+fn render(style: Style, text: &str, color: bool) -> String {
+    if color {
         format!("{}{}{}", style.render(), text, style.render_reset())
     } else {
         text.to_string()
     }
 }
 
-// --- Composite status lines (stderr) ----------------------------------------
-
-/// `verb: name` - a completed action on a session (`pinned: api`, `deleted: api`).
 pub fn done(verb: &str, name: &str) {
     eprintln!("{}: {}", epaint(GREEN_BOLD, verb), epaint(CYAN_BOLD, name));
 }
 
-/// `verb <rest>` - a status step with a green verb and dim detail
-/// (`wrote SessionStart hook to ~/.claude/settings.json`).
 pub fn step(verb: &str, rest: &str) {
     eprintln!("{} {}", epaint(GREEN_BOLD, verb), epaint(DIM, rest));
 }
 
-/// `warning: <msg>` - cargo-style warning line.
 pub fn warn(msg: &str) {
     eprintln!("{} {}", epaint(YELLOW_BOLD, "warning:"), msg);
 }
 
-/// A dim `-> <msg>` hint line.
 pub fn hint(msg: &str) {
     eprintln!("{} {}", epaint(DIM, ARROW), epaint(DIM, msg));
 }
 
-/// The "no csm sessions" empty state, with a dim hint.
 pub fn no_sessions_hint() {
     eprintln!("{}", epaint(DIM, "no csm sessions yet."));
     hint("start one with: csm <name>");
 }
 
-/// The "no active sessions" empty state - every session is archived - with a
-/// dim pointer at the archived listing.
 pub fn no_active_sessions_hint() {
     eprintln!("{}", epaint(DIM, "no active sessions."));
     hint("csm list --archived");
 }
 
-/// `y/N` confirmation prompt on stderr. Returns true for `y` (case-insensitive);
-/// empty or anything else is false.
 pub fn confirm(msg: &str) -> Result<bool> {
     eprintln!("{}", epaint(BOLD, msg));
     eprint!("  {} ", epaint(DIM, "[y/N]"));
@@ -159,13 +110,7 @@ pub fn confirm(msg: &str) -> Result<bool> {
     Ok(line.trim().eq_ignore_ascii_case("y"))
 }
 
-// --- Session table rows -------------------------------------------------------
-
-/// One session-table row - the single layout every session list shares (gc's
-/// collectable and kept blocks, the session picker). `index` is the 1-based
-/// selection handle; `None` leaves the column blank for a row nothing can
-/// select. `marker` is the caller's trailing note, spacing included (gc's
-/// `(N unfinished)`, the picker's pin mark).
+/// Format a session row. The optional index is 1-based, and `marker` includes its own spacing.
 pub fn session_row(
     index: Option<usize>,
     name: &str,
@@ -187,10 +132,6 @@ pub fn session_row(
     )
 }
 
-// --- Path helpers -----------------------------------------------------------
-
-/// Replace a leading `$HOME` with `~` for display. Falls back to the raw
-/// string if `HOME` is unset or the path doesn't start with it.
 pub fn abbrev_home(path: &str) -> String {
     if let Some(home) = std::env::var_os("HOME") {
         let home = home.to_string_lossy();
@@ -205,10 +146,6 @@ pub fn abbrev_path(path: &std::path::Path) -> String {
     abbrev_home(&path.display().to_string())
 }
 
-// --- Error printing (cargo-style) -------------------------------------------
-
-/// Print an error in cargo's style: a red-bold `error:` line, followed by a
-/// dim `Caused by:` chain if the error has context. Goes to stderr.
 pub fn print_error(err: &anyhow::Error) {
     eprintln!("{} {}", epaint(RED_BOLD, "error:"), err);
     let causes: Vec<_> = err.chain().skip(1).collect();

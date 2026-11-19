@@ -1,11 +1,4 @@
-//! Claude Code SessionStart hook handler.
-//!
-//! stdin  : Claude pipes a SessionStart event JSON; we don't parse it.
-//! stdout : { "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "..." } }
-//!
-//! When no active csm session is bound ($CSM_SESSION unset or unknown), we
-//! exit 0 with no output - inject nothing. stdout must contain *only* the JSON
-//! object, so all diagnostics go to stderr.
+//! SessionStart handler for Claude Code and Codex. Stdout is reserved for the JSON response.
 
 use crate::store;
 use crate::workspace;
@@ -19,21 +12,15 @@ pub fn run_hook() -> Result<()> {
     run_hook_to(&mut std::io::stdout())
 }
 
-/// SessionStart hook body, writing the JSON result to `out` instead of stdout
-/// directly so tests can capture it. `run_hook` is the prod entry point
-/// (stdout); tests pass a buffer to assert the no-session-no-inject and
-/// emit-context paths without spawning a process.
 fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
     let name = match std::env::var("CSM_SESSION") {
         Ok(n) if !n.is_empty() => n,
-        _ => return Ok(()), // no active session - inject nothing
+        _ => return Ok(()),
     };
 
-    // Self-heal the workspace and refresh last_access. Unknown sessions are
-    // ignored - the hook must not create sessions for stray `$CSM_SESSION`.
     let meta = match store::touch_if_exists(&name)? {
         Some(m) => m,
-        None => return Ok(()), // unknown session - inject nothing
+        None => return Ok(()),
     };
     workspace::ensure_workspace(&name, &meta)?;
 
@@ -48,15 +35,7 @@ fn run_hook_to<W: Write>(out: &mut W) -> Result<()> {
     Ok(())
 }
 
-/// Build the `[csm]` state snapshot for a session: workspace path, `state.md`
-/// (capped), and the `tasks/INDEX.md` board (capped and rendered - the board's
-/// sections, each task's head and `needs:` tail). This is the lean orientation
-/// memory: the prompt tells the agent these two files are the orientation
-/// surface and that the `[csm]` block is "only a snapshot of these", so the
-/// snapshot must include both. The agent discovers the `scripts/`, `notes/` and
-/// `views/` corpora through the filesystem and their INDEXes (the working-mode
-/// prompt points at them), so they aren't injected here. Used by both the
-/// SessionStart hook (`run_hook`) and the pi launch adapter.
+/// Render the session snapshot shared by the hook and launch-time injection.
 pub(crate) fn build_context(name: &str) -> String {
     let dir = store::session_dir(name)
         .map(|p| p.display().to_string())
@@ -76,19 +55,15 @@ Workspace directory: {dir}
     )
 }
 
-/// Cap `content` at `cap` chars (by char count), appending a truncation note
-/// naming `label` (a file name) when it overflows. `None` content yields a
-/// "(label not found)" placeholder. Shared by the state.md and tasks/INDEX.md
-/// snapshots so the cap policy can't drift between them.
 fn read_capped(content: Option<String>, cap: usize, label: &str) -> String {
     let content = match content {
         Some(c) => c,
         None => return format!("({label} not found)"),
     };
-    if content.chars().count() <= cap {
+    let Some((end, _)) = content.char_indices().nth(cap) else {
         return content;
-    }
-    let truncated: String = content.chars().take(cap).collect();
+    };
+    let truncated = &content[..end];
     format!("{truncated}\n...({label} truncated; full file at the workspace directory)...")
 }
 
@@ -96,8 +71,6 @@ fn read_state_capped(name: &str) -> String {
     read_capped(workspace::read_state_md(name), STATE_CAP, "state.md")
 }
 
-/// The board's snapshot: [`workspace::render_board`]'s rendering, capped. The
-/// block carries the board's sections with one head line per task.
 fn read_tasks_capped(name: &str) -> String {
     let rendered = workspace::read_tasks_board(name).map(|board| workspace::render_board(&board));
     read_capped(rendered, TASKS_CAP, "tasks/INDEX.md")
@@ -110,15 +83,12 @@ mod tests {
     use serial_test::serial;
     use std::fs;
 
-    /// Create a session with a workspace and the given state.md body
-    /// (overwriting the scaffolded file).
     fn seed_session(name: &str, state: &str) {
         crate::test_support::scaffold_session(name);
         let dir = store::session_dir(name).unwrap();
         fs::write(dir.join("state.md"), state).unwrap();
     }
 
-    /// Run the hook into a buffer and assert it injected nothing (no output).
     fn assert_no_inject() {
         let mut buf = Vec::new();
         run_hook_to(&mut buf).unwrap();
@@ -138,9 +108,6 @@ mod tests {
         });
     }
 
-    /// The board reaches the agent as a rendering, not as the file: the board's
-    /// sections in board order, one head line per task with its `needs:` tail,
-    /// Done in numeric id order.
     #[test]
     #[serial]
     fn build_context_renders_the_board_by_section() {
@@ -152,8 +119,6 @@ mod tests {
                  ## Pending review\n- 005 e\n\n## Pending fix\n- 006 f\n\n\
                  ## Done\n- 002 b\n- 001 a\n",
             );
-            // A view on a live task: views are human-facing, so no marker
-            // reaches the snapshot.
             let dir = store::session_dir("ws").unwrap();
             fs::write(dir.join("views/003-c.html"), "<html></html>").unwrap();
 
@@ -172,7 +137,6 @@ mod tests {
     #[serial]
     fn build_context_falls_back_when_files_missing() {
         with_csm_home(|_dir| {
-            // In the index but no workspace dir / files.
             store::touch_session("ws", "/o").unwrap();
             let ctx = build_context("ws");
             assert!(ctx.contains("(state.md not found)"));
@@ -190,7 +154,6 @@ mod tests {
             assert!(
                 ctx.contains("...(state.md truncated; full file at the workspace directory)...")
             );
-            // Exactly STATE_CAP 'a's survive (contiguous); the +1th does not.
             assert!(ctx.contains(&"a".repeat(STATE_CAP)));
             assert!(!ctx.contains(&"a".repeat(STATE_CAP + 1)));
         });
@@ -202,7 +165,6 @@ mod tests {
         with_csm_home(|_dir| {
             seed_session("ws", "state");
             let dir = store::session_dir("ws").unwrap();
-            // A board whose *rendered* block overflows: 300 heads of 40 chars.
             let mut md = String::from("## Open\n");
             for i in 0..300 {
                 md.push_str(&format!("- {i:03} {}\n", "t".repeat(40)));
@@ -212,8 +174,6 @@ mod tests {
             assert!(ctx.contains(
                 "...(tasks/INDEX.md truncated; full file at the workspace directory)..."
             ));
-            // Exactly TASKS_CAP chars of the rendered block survive; the last
-            // task is cut.
             let rendered = workspace::render_board(&workspace::parse_tasks_board(&md));
             assert!(rendered.chars().count() > TASKS_CAP);
             let kept: String = rendered.chars().take(TASKS_CAP).collect();
@@ -244,7 +204,6 @@ mod tests {
         with_csm_home(|_dir| {
             with_env("CSM_SESSION", "ghost", || {
                 assert_no_inject();
-                // Unknown sessions are not created.
                 assert!(store::require_session("ghost").is_err());
                 assert!(!store::session_dir("ghost").unwrap().exists());
             });

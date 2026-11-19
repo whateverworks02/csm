@@ -1,18 +1,4 @@
-//! Health check + guided repair for csm sessions and agent wiring.
-//!
-//! Modelled on `flutter doctor` / `brew doctor` / `expo doctor` / `npm doctor`:
-//! a triage command that says whether things are OK, pinpoints what's wrong,
-//! and tells you what to do (or does it via `--fix`).
-//!
-//! - Read-only by default; `--fix` repairs fixable issues (per-finding confirm,
-//!   `--fix --yes` skips prompts for CI).
-//! - Each check is one row with a status: `ok` / `warn` / `error`. All checks
-//!   are shown (grouped by category) so the checked surface area is visible.
-//! - Severity is meaningful: self-healing gaps (ghosts, incomplete scaffolds)
-//!   are `warn` - they resolve on the next `csm <name>` start because
-//!   [`workspace::ensure_workspace`] is idempotent. Missing wiring, malformed
-//!   settings, an unwritable `~/.csm`, and orphan dirs are `error`.
-//! - Wiring is never mutated here (only diagnosed); repair is `csm init`'s job.
+//! Diagnose session consistency and agent wiring. `--fix` repairs session scaffolds.
 
 use crate::inject;
 use crate::store;
@@ -26,40 +12,30 @@ use std::process::{Command, Stdio};
 
 pub fn run(fix: bool, yes: bool) -> Result<()> {
     let checks = collect_checks();
-    let has_finding = checks.iter().any(|c| !matches!(c.status, Status::Ok));
-
-    // Always print the full report (every check, grouped) - like flutter/brew
-    // doctor, the checked surface area should be visible, not hidden behind a
-    // healthy one-liner.
     report(&checks, false);
 
-    if !has_finding {
-        println!();
-        println!("{}", ui::paint(ui::GREEN_BOLD, "csm is healthy."));
-        return Ok(());
+    if checks
+        .iter()
+        .any(|check| !matches!(check.status, Status::Ok))
+    {
+        if !fix || !apply_fixable(&checks, yes)? {
+            summarize_and_exit(&checks, !fix);
+        }
+        eprintln!();
+        eprintln!("{}", ui::epaint(ui::DIM, "re-running checks..."));
+        let remaining = collect_checks();
+        report(&remaining, true);
+        if remaining
+            .iter()
+            .any(|check| !matches!(check.status, Status::Ok))
+        {
+            summarize_and_exit(&remaining, false);
+        }
     }
 
-    if fix {
-        let fixed = apply_fixable(&checks, yes)?;
-        if fixed {
-            eprintln!();
-            eprintln!("{}", ui::epaint(ui::DIM, "re-running checks..."));
-            let remaining = collect_checks();
-            // Re-run prints only remaining findings - wiring is unchanged by
-            // `--fix` and was already shown above.
-            report(&remaining, true);
-            if remaining.iter().all(|c| matches!(c.status, Status::Ok)) {
-                println!();
-                println!("{}", ui::paint(ui::GREEN_BOLD, "csm is healthy."));
-                return Ok(());
-            }
-            summarize_and_exit(&remaining, false);
-        } else {
-            summarize_and_exit(&checks, false);
-        }
-    } else {
-        summarize_and_exit(&checks, true);
-    }
+    println!();
+    println!("{}", ui::paint(ui::GREEN_BOLD, "csm is healthy."));
+    Ok(())
 }
 
 fn collect_checks() -> Vec<Check> {
@@ -69,10 +45,6 @@ fn collect_checks() -> Vec<Check> {
     out
 }
 
-// --- report ----------------------------------------------------------------
-
-/// Print checks grouped by category. When `only_findings` is true, omit ok rows
-/// (used for the concise re-run after `--fix`, so unchanged wiring isn't reprinted).
 fn report(checks: &[Check], only_findings: bool) {
     for cat in [Category::Consistency, Category::Wiring] {
         let in_cat: Vec<&Check> = checks
@@ -136,8 +108,6 @@ fn summarize_and_exit(checks: &[Check], hint_fix: bool) -> ! {
     std::process::exit(1);
 }
 
-// --- consistency -----------------------------------------------------------
-
 fn consistency_checks(out: &mut Vec<Check>) {
     let idx = store::load_index().unwrap_or_default();
 
@@ -176,10 +146,7 @@ fn consistency_checks(out: &mut Vec<Check>) {
         }
     }
 
-    // Orphans: dirs under ~/.csm/sessions/ with no index entry. These don't
-    // self-heal (you'd never start an untracked session), so they're an error
-    // with a manual remedy - not fixable by `--fix` (auto-removing user dirs
-    // is too destructive).
+    // Orphan directories may contain user data and require a manual remedy.
     for (fname, path) in orphan_dirs(&idx) {
         out.push(Check {
             category: Category::Consistency,
@@ -193,7 +160,6 @@ fn consistency_checks(out: &mut Vec<Check>) {
         });
     }
 
-    // If everything's fine, add one ok row so the report shows the checked surface.
     if !out.iter().any(|c| c.category == Category::Consistency) {
         let n = idx.sessions.len();
         out.push(Check {
@@ -210,9 +176,6 @@ fn consistency_checks(out: &mut Vec<Check>) {
     }
 }
 
-// --- wiring (report-only; repair is `csm init`) ----------------------------
-
-/// Dirs under ~/.csm/sessions/ with no index entry, as (dir_name, path).
 fn orphan_dirs(idx: &store::Index) -> Vec<(String, PathBuf)> {
     let Ok(sessions_dir) = store::sessions_dir() else {
         return Vec::new();
@@ -237,7 +200,6 @@ fn orphan_dirs(idx: &store::Index) -> Vec<(String, PathBuf)> {
 
 const INIT_HINT: &str = "run `csm init`";
 
-/// Construct a wiring check - all wiring checks are report-only (`fix: None`).
 fn wiring(label: &str, status: Status, detail: String) -> Check {
     Check {
         category: Category::Wiring,
@@ -248,10 +210,6 @@ fn wiring(label: &str, status: Status, detail: String) -> Check {
     }
 }
 
-/// Wiring check: does the SessionStart hook file at `path` (Claude
-/// `settings.json` or codex `hooks.json` - same hooks shape) contain the csm
-/// hook entry? `file_desc` labels the malformed-JSON error (e.g.
-/// "settings.json"). Report-only.
 fn check_hook(label: &str, path: Option<PathBuf>, file_desc: &str) -> Check {
     let (status, detail) = match path {
         None => (Status::Error, INIT_HINT.to_string()),
@@ -267,9 +225,6 @@ fn check_hook(label: &str, path: Option<PathBuf>, file_desc: &str) -> Check {
     wiring(label, status, detail)
 }
 
-/// Wiring check: does the agent context file at `path` contain the csm prompt
-/// block? Report-only. (pi uses a `Warn`-on-miss variant with a different
-/// detail format, kept inline in [`wiring_checks`].)
 fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
     let (ok, detail) = match path {
         Some(p) if inject::prompt_block_present(&p) => (true, ui::abbrev_path(&p)),
@@ -278,14 +233,6 @@ fn check_prompt(label: &str, path: Option<PathBuf>) -> Check {
     wiring(label, if ok { Status::Ok } else { Status::Error }, detail)
 }
 
-/// Wiring check for a launch-injection agent's prompt block - like
-/// [`check_prompt`] but conditional on the agent being installed (`dir`
-/// exists, the codex pattern) and Warn-on-miss. Used by the launch-injection
-/// agents (pi, opencode): their per-session state is injected at launch, so a
-/// missing block degrades every new launch (the working-mode prompt is absent)
-/// rather than silently breaking a hook mid-work. Returns `None` (no row) when
-/// the agent isn't installed. `target` resolves the file to check (pi's
-/// candidate precedence makes it fallible). Report-only.
 fn check_prompt_if_installed(
     label: &str,
     dir: Result<PathBuf>,
@@ -307,28 +254,21 @@ fn check_prompt_if_installed(
 }
 
 fn wiring_checks(out: &mut Vec<Check>) {
-    // SessionStart hook in ~/.claude/settings.json.
     out.push(check_hook(
         "SessionStart hook",
         inject::claude_dir().ok().map(|d| d.join("settings.json")),
         "settings.json",
     ));
 
-    // csm prompt block in ~/.claude/CLAUDE.md.
     out.push(check_prompt("claude prompt", inject::claude_md_path().ok()));
 
-    // pi prompt block - only if pi is installed (~/.pi/agent exists);
-    // launch-time injection, so the Warn-on-miss variant.
     if let Some(check) =
         check_prompt_if_installed("pi prompt", inject::pi_dir(), inject::pi_context_target())
     {
         out.push(check);
     }
 
-    // codex SessionStart hook + prompt - only if codex is installed
-    // (~/.codex exists). The hook file shares Claude's JSON shape, so
-    // check_hook / check_prompt are reused.
-    if inject::codex_dir().ok().is_some_and(|d| d.exists()) {
+    if inject::codex_dir().is_ok_and(|dir| dir.exists()) {
         out.push(check_hook(
             "codex hook",
             inject::codex_hooks_path().ok(),
@@ -340,9 +280,6 @@ fn wiring_checks(out: &mut Vec<Check>) {
         ));
     }
 
-    // opencode prompt - only if opencode is installed (~/.config/opencode
-    // exists). Launch-time injection like pi (no hook file to check), so the
-    // same Warn-on-miss variant.
     if let Some(check) = check_prompt_if_installed(
         "opencode prompt",
         inject::opencode_dir(),
@@ -351,7 +288,6 @@ fn wiring_checks(out: &mut Vec<Check>) {
         out.push(check);
     }
 
-    // csm on PATH so the hook command `csm hook` resolves.
     let csm_path = inject::which_csm();
     out.push(wiring(
         "csm on PATH",
@@ -366,12 +302,6 @@ fn wiring_checks(out: &mut Vec<Check>) {
         },
     ));
 
-    // Smoke-test: run the `csm` the hook actually invokes (PATH-resolved, not
-    // `current_exe()`) with no active session; ok iff it exits 0. Stronger than
-    // string-matching settings.json - catches a renamed/broken subcommand or a
-    // stale binary on PATH. Skipped when csm isn't on PATH (the `csm on PATH`
-    // check above already flags that). Runs with CSM_SESSION unset so it takes
-    // the no-op path and mutates nothing.
     if let Some(exe) = &csm_path {
         let smoke_ok = smoke_test_hook(exe);
         out.push(wiring(
@@ -385,7 +315,6 @@ fn wiring_checks(out: &mut Vec<Check>) {
         ));
     }
 
-    // ~/.csm writable (csm must be able to store sessions).
     let (writable, detail) = writable_check();
     out.push(wiring(
         "~/.csm writable",
@@ -394,10 +323,7 @@ fn wiring_checks(out: &mut Vec<Check>) {
     ));
 }
 
-/// Run `<exe> hook` with no active session; true iff it exits 0. `exe` is the
-/// PATH-resolved csm (what the SessionStart hook invokes), not `current_exe()` -
-/// so a stale/broken csm on PATH is caught even when doctor is run from a
-/// different binary.
+/// Test the PATH-resolved hook with no session bound, so the probe cannot touch session state.
 fn smoke_test_hook(exe: &Path) -> bool {
     Command::new(exe)
         .arg("hook")
@@ -410,15 +336,12 @@ fn smoke_test_hook(exe: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Can csm write to `~/.csm`? Returns (ok, detail).
 fn writable_check() -> (bool, String) {
     let home = match store::csm_home() {
         Ok(h) => h,
         Err(_) => return (false, "HOME not set".into()),
     };
-    // If ~/.csm doesn't exist yet, that's fine - it's created on the first
-    // session (touch_session -> save_index create_dir_all). Only probe when it
-    // already exists, to keep doctor side-effect-free.
+    // A missing data directory is created on the first session.
     if !home.exists() {
         return (
             true,
@@ -434,8 +357,6 @@ fn writable_check() -> (bool, String) {
         (false, format!("can't write to {}", ui::abbrev_path(&home)))
     }
 }
-
-// --- fix flow --------------------------------------------------------------
 
 fn apply_fixable(checks: &[Check], yes: bool) -> Result<bool> {
     let mut any = false;
@@ -500,8 +421,6 @@ fn apply_fix(fix: &Fix, yes: bool) -> Result<bool> {
     }
 }
 
-// --- types -----------------------------------------------------------------
-
 #[derive(PartialEq)]
 enum Category {
     Consistency,
@@ -550,11 +469,6 @@ mod tests {
     use serial_test::serial;
     use std::fs;
 
-    /// Run consistency checks against the isolated `$CSM_HOME`.
-    /// (`doctor::run` itself `process::exit(1)`s on findings and runs wiring
-    /// checks that hit `~/.claude`/PATH/`which csm`/a `csm hook` subprocess -
-    /// not testable in-process. The consistency + fix logic is exercised here
-    /// via the private fns, which `use super::*` reaches.)
     fn consistency() -> Vec<Check> {
         let mut out = Vec::new();
         consistency_checks(&mut out);
@@ -578,7 +492,6 @@ mod tests {
     #[serial]
     fn detects_ghost_session() {
         with_csm_home(|_dir| {
-            // Index entry, no workspace dir -> ghost.
             store::touch_session("ghost", "/o").unwrap();
             assert!(!store::session_dir("ghost").unwrap().exists());
             let checks = consistency();
@@ -610,7 +523,6 @@ mod tests {
     #[serial]
     fn detects_orphan_dir_as_error_not_fixable() {
         with_csm_home(|_dir| {
-            // A session dir with no index entry.
             fs::create_dir_all(store::sessions_dir().unwrap().join("lonely")).unwrap();
             let checks = consistency();
             let orphan = checks
@@ -628,7 +540,6 @@ mod tests {
         with_csm_home(|_dir| {
             let _meta = store::touch_session("ghost", "/o").unwrap();
             assert!(!store::session_dir("ghost").unwrap().exists());
-            // Detect -> apply the detected fix (end-to-end via `--yes`).
             let checks = consistency();
             let fix = checks
                 .iter()
@@ -638,13 +549,11 @@ mod tests {
                 apply_fix(fix, true).unwrap(),
                 "yes=true scaffolds the ghost"
             );
-            // Workspace now complete: no ghost, no incomplete.
             let after = consistency();
             assert!(
                 after.iter().all(|c| matches!(c.status, Status::Ok)),
                 "after fix the session should be healthy"
             );
-            // Idempotent: re-running finds nothing left to fix.
             assert!(
                 consistency().iter().find_map(|c| c.fix.as_ref()).is_none(),
                 "no fixable finding should remain after repair"
@@ -669,14 +578,12 @@ mod tests {
                 apply_fix(fix, true).unwrap(),
                 "yes=true fills missing files"
             );
-            // Missing files restored; pre-existing files (scripts/notes) kept.
             assert!(dir.join("state.md").exists());
             assert!(dir.join("tasks/INDEX.md").exists());
             assert!(
                 dir.join("scripts/INDEX.md").exists(),
                 "pre-existing files kept"
             );
-            // Idempotent: re-running finds nothing left to fix.
             assert!(
                 consistency().iter().find_map(|c| c.fix.as_ref()).is_none(),
                 "no fixable finding should remain after repair"

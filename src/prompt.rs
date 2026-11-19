@@ -1,16 +1,7 @@
-//! The csm working-mode prompt, injected into `~/.claude/CLAUDE.md` via
-//! `csm init`.
-//!
-//! Style: terse, action-first. No tool introduction - just tell the agent what
-//! to do when a session is active. No hard-wrapping (each unit on one line).
-//! Dormant unless a csm session is active, so safe in the global CLAUDE.md.
-
 pub const CSM_MARK_BEGIN: &str = "<!-- csm:begin -->";
 pub const CSM_MARK_END: &str = "<!-- csm:end -->";
 
-/// The full marked block to inject. `csm_home` is rendered into the prompt's
-/// path so a relocated `$CSM_HOME` is reflected - an agent follows the actual
-/// home, not a hardcoded `~/.csm`.
+/// Render the marked prompt block using the configured csm home.
 pub fn csm_block(csm_home: &str) -> String {
     format!(
         "{begin}\n\

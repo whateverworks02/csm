@@ -12,14 +12,12 @@ set -euo pipefail
 OWNER_REPO="${CSM_REPO:-whateverworks02/csm}"
 INSTALL_DIR="${CSM_INSTALL_DIR:-$HOME/.local/bin}"
 
-# --- target detection (macOS arm64 only for now) ----------------------------
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) TARGET=aarch64-apple-darwin ;;
   Darwin/*)     echo "error: Intel macOS isn't built yet (only Apple Silicon)." >&2; exit 1 ;;
   *)            echo "error: only macOS is supported for now (got $(uname -s)/$(uname -m))." >&2; exit 1 ;;
 esac
 
-# --- preflight --------------------------------------------------------------
 command -v curl   >/dev/null || { echo "error: curl is required" >&2; exit 1; }
 command -v shasum >/dev/null || { echo "error: shasum is required (macOS ships it)" >&2; exit 1; }
 
@@ -28,7 +26,6 @@ BASE="https://github.com/${OWNER_REPO}/releases/latest/download"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# --- download + verify checksum ---------------------------------------------
 echo "==> downloading ${TARBALL} (latest release)..."
 curl -fsSL "${BASE}/${TARBALL}"        -o "${TMP}/${TARBALL}"
 curl -fsSL "${BASE}/${TARBALL}.sha256" -o "${TMP}/${TARBALL}.sha256"
@@ -37,21 +34,20 @@ echo "==> verifying checksum..."
 ( cd "$TMP" && shasum -a 256 -c "${TARBALL}.sha256" >/dev/null 2>&1 ) \
   || { echo "error: checksum mismatch - download may be corrupted or tampered" >&2; exit 1; }
 
-# --- install ----------------------------------------------------------------
 echo "==> installing to ${INSTALL_DIR}/csm..."
 mkdir -p "$INSTALL_DIR"
 tar xzf "${TMP}/${TARBALL}" -C "$TMP"
 install -m 755 "${TMP}/csm" "${INSTALL_DIR}/csm"
 echo "==> installed: $("${INSTALL_DIR}/csm" --version)"
 
-# --- wire up (the SessionStart hook needs `csm` on PATH) --------------------
+# SessionStart resolves csm through PATH.
 echo "==> running csm init (SessionStart hook + working-mode prompt)..."
 "${INSTALL_DIR}/csm" init
 
 ON_PATH=0
 case ":${PATH}:" in *":${INSTALL_DIR}:"*) ON_PATH=1 ;; esac
 
-# --- health check (don't abort if it flags PATH - we hint below) ------------
+# Give the PATH hint even when doctor exits unsuccessfully.
 echo
 echo "==> csm doctor:"
 if "${INSTALL_DIR}/csm" doctor; then

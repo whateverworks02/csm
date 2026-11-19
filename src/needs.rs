@@ -1,20 +1,4 @@
-//! Tasks-block view for `csm show`: render the board's `needs:` tails as a
-//! dependency forest. The tails are the single dependency mapping, parsed by
-//! [`crate::workspace::parse_needs_tail`] so this view, the snapshot's board
-//! block, and the head all read one rule; this module reads them straight from
-//! the parsed board - no second graph file, no cache - so the picture cannot
-//! drift from the plan the agents read.
-//!
-//! The forest follows the `cargo tree` lineage: every live task (Open, then
-//! Pending review, then Pending fix - board order) is a root; its needs hang
-//! below as leaves. A live task is expanded only at its own root - under
-//! another task it is a single leaf - so no subtree repeats and a cycle
-//! cannot recurse. Status rides on glyphs (`○` `◐` `◑` `✓`); anomalies are
-//! marked at the relation they break (`? ... (missing)` / `(unknown)`,
-//! `! itself`, `! unparseable tail`, a `warning:` cycle line) - never
-//! rendered as satisfied. `claimable` lists the Open / Pending fix tasks
-//! whose refs all hold; a `[condition]` is never assumed met. Boards with
-//! no live task keep the bare card (summary + done line only).
+//! Render live tasks and their immediate dependencies for `csm show`.
 
 use crate::ui;
 use crate::workspace::{
@@ -22,16 +6,11 @@ use crate::workspace::{
 };
 use std::collections::{HashMap, HashSet};
 
-// --- view building -----------------------------------------------------------
-
-/// One board entry with its tail parsed and status attached.
 struct Entry {
     id: String,
     label: String,
     status: Status,
     needs: TaskNeeds,
-    /// Whether a view binds to this task. Stamped once here, so the binding is
-    /// task data rather than something each render site re-derives.
     has_view: bool,
 }
 
@@ -40,7 +19,7 @@ fn collect_entries(board: &TasksBoard, view_ids: &HashSet<String>) -> Vec<Entry>
     for (raws, status) in board.sections() {
         for raw in raws {
             let Some(id) = entry_id(raw) else {
-                continue; // entries without an id cannot be referenced
+                continue;
             };
             out.push(Entry {
                 id: id.to_string(),
@@ -54,31 +33,17 @@ fn collect_entries(board: &TasksBoard, view_ids: &HashSet<String>) -> Vec<Entry>
     out
 }
 
-/// The rendered tasks block of the `csm show` card.
 pub struct DepView {
-    /// The live roots and their `needs:` leaves, grouped by board section in
-    /// board order. Each group is its own `cargo tree`, rendered under its
-    /// section's label; a section with no live task contributes no group.
     pub sections: Vec<SectionLines>,
-    /// The board-level cycle `warning:` line when the tails loop, rendered once
-    /// after the sections; `None` when no loop exists.
     pub warning_line: Option<String>,
-    /// Comma-joined ids of claimable tasks (Open / Pending fix whose needs
-    /// all hold). Empty when nothing is claimable or no live task carries a
-    /// tail - then the row would only restate the Open roots.
     pub claimable_line: String,
 }
 
-/// One board section of the card's tasks block: the status it renders under,
-/// and the forest lines for the tasks that sit in it.
 pub struct SectionLines {
     pub status: Status,
     pub lines: Vec<String>,
 }
 
-/// cargo-tree connectors. Roots hang off the `tasks` label row; children of
-/// the last root lose the rail. Exactly these four pieces, so the forest
-/// cannot drift into a second shape.
 const BRANCH: &str = "├── ";
 const LAST_BRANCH: &str = "└── ";
 const RAIL: &str = "│   ";
@@ -92,15 +57,10 @@ fn branch(last: bool) -> &'static str {
     }
 }
 
-/// A dimmed connector: the structure recedes, the task nodes carry the eye.
 fn dim_branch(last: bool) -> String {
     ui::paint(ui::DIM, branch(last))
 }
 
-/// A task's view marker: the painted glyph when the task has a view, nothing
-/// otherwise. Presence only - absence needs no glyph, so the forest stays a
-/// picture of the plan. The single emitter for the marker, so every place a
-/// task's label renders separates it from the label the same way.
 pub fn view_mark(has_view: bool) -> String {
     if has_view {
         format!(" {}", ui::paint(ui::CYAN_BOLD, ui::T_VIEW))
@@ -109,9 +69,6 @@ pub fn view_mark(has_view: bool) -> String {
     }
 }
 
-/// Status glyph + color for one task node. Shape carries the status without
-/// color; color reinforces it (cyan open, yellow review, magenta fix, green
-/// done).
 fn status_mark(s: Status) -> String {
     let (g, style) = match s {
         Status::Open => (ui::T_OPEN, ui::CYAN),
@@ -122,33 +79,21 @@ fn status_mark(s: Status) -> String {
     ui::paint(style, g)
 }
 
-/// Where a `needs:` ref points, resolved against this board or the boundary.
 enum RefTarget {
-    /// The consumer names itself.
     Itself,
-    /// A task on this board (index into `entries`).
     Local(usize),
-    /// A local id no board entry carries.
     Missing,
-    /// A cross-session ref, with the target's status when the boundary
-    /// resolves it (`None` = session or task not found).
     Foreign {
         name: String,
         status: Option<Status>,
     },
 }
 
-/// One rendered forest leaf, with whether the ref counts as met.
 struct LeafView {
     line: String,
     satisfied: bool,
 }
 
-/// Render one ref as a leaf: a status-marked task when it resolves, `?`
-/// when the boards cannot resolve it, `!` when the relation itself is
-/// broken. The condition rides on every leaf, resolved or not. A ref is met
-/// only when it resolves to a Done task and carries no condition - a
-/// condition is never assumed verified.
 fn leaf_view(
     r: &NeedRef,
     consumer: usize,
@@ -157,7 +102,6 @@ fn leaf_view(
     by_id: &HashMap<&str, usize>,
     boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
 ) -> LeafView {
-    // A `session/task` ref naming this session itself is local.
     let local = r.session.as_deref().is_none_or(|s| s == session);
     let target = if local && r.task == entries[consumer].id {
         RefTarget::Itself
@@ -184,8 +128,7 @@ fn leaf_view(
         },
         RefTarget::Local(i) => {
             let e = &entries[i];
-            // A Done ref with a condition looks satisfied but never is -
-            // say so at the leaf.
+            // Conditions need external evidence even when the referenced task is Done.
             let unverified = if e.status == Status::Done && r.condition.is_some() {
                 " (unverified)"
             } else {
@@ -232,15 +175,6 @@ fn leaf_view(
     }
 }
 
-/// Build the forest view for one session's board. Roots are grouped by the
-/// board's own sections - the reader's mental model - and each group is its own
-/// tree, so the last root of a section drops the rail. `boundary_status`
-/// resolves a cross-session ref against the target session's own board (`None` =
-/// session or task not found, shown as `(unknown)`). `view_ids` are the task
-/// ids that have a view, marked on their task's label wherever it renders.
-/// Returns `None` when no task is live - a fully-done (or empty) board keeps
-/// the bare card (summary + done section only). Read-only over the board:
-/// nothing here writes back.
 pub fn build_view(
     board: &TasksBoard,
     session: &str,
@@ -253,8 +187,6 @@ pub fn build_view(
         .enumerate()
         .map(|(i, e)| (e.id.as_str(), i))
         .collect();
-    // Roots: every live task, in board order (collect_entries already walks
-    // Open, then Pending review, then Pending fix).
     let live: Vec<usize> = entries
         .iter()
         .enumerate()
@@ -264,15 +196,11 @@ pub fn build_view(
     if live.is_empty() {
         return None;
     }
-    // The claimable row earns its place only when a tail exists to gate
-    // anything; without tails it would restate the Open roots.
     let has_live_tail = live.iter().any(|&i| {
         let n = &entries[i].needs;
         !n.refs.is_empty() || n.unparseable.is_some()
     });
 
-    // `live` is in board order, so each status's live entries are one run of
-    // it; the group is that run, rendered as its own tree.
     let mut sections: Vec<SectionLines> = Vec::new();
     let mut claimable: Vec<&str> = Vec::new();
     for status in Status::ALL {
@@ -295,7 +223,6 @@ pub fn build_view(
                 e.label,
                 view_mark(e.has_view)
             ));
-            // Children of the last root drop the rail (cargo tree).
             let rail = ui::paint(ui::DIM, if last_root { NO_RAIL } else { RAIL });
             let mut all_met = true;
             if let Some(raw) = &e.needs.unparseable {
@@ -321,7 +248,6 @@ pub fn build_view(
         sections.push(SectionLines { status, lines });
     }
 
-    // A loop spans sections, so its warning is the block's, not a section's.
     let warning_line = find_cycle(&live_adjacency(&entries, &by_id, session)).map(|cycle| {
         let names: Vec<&str> = cycle.iter().map(|&i| entries[i].label.as_str()).collect();
         format!(
@@ -342,10 +268,7 @@ pub fn build_view(
     })
 }
 
-/// Local edges among live entries, for cycle detection. Self-loops are
-/// excluded (the leaf already says `! itself`); missing refs have no
-/// target. Done entries take no part: their tails are history, and a loop
-/// through a Done task blocks nothing.
+/// Local live-task edges. Self-references are reported separately on their leaves.
 fn live_adjacency(
     entries: &[Entry],
     by_id: &HashMap<&str, usize>,
@@ -358,7 +281,7 @@ fn live_adjacency(
         }
         for r in &e.needs.refs {
             if r.session.as_deref().is_some_and(|s| s != session) {
-                continue; // cross-session boundary: no local edge
+                continue;
             }
             let Some(&t) = by_id.get(r.task.as_str()) else {
                 continue;
@@ -372,7 +295,7 @@ fn live_adjacency(
     adj
 }
 
-/// First cycle found by DFS, as a closed path `a -> b -> a`; `None` if acyclic.
+/// Return the first cycle as a closed path, such as `a -> b -> a`.
 fn find_cycle(adj: &[Vec<usize>]) -> Option<Vec<usize>> {
     #[derive(Clone, Copy, PartialEq)]
     enum S {
@@ -425,13 +348,10 @@ mod tests {
     use super::*;
     use crate::workspace::parse_tasks_board;
 
-    /// A boundary resolver that knows nothing: every cross-session ref is
-    /// unresolved, which is the case the view must flag rather than assume.
     fn no_boundary(_: &str, _: &str) -> Option<Status> {
         None
     }
 
-    /// A view-id set from literals: the shape the marker tests assert.
     fn view_ids(ids: &[&str]) -> HashSet<String> {
         ids.iter().map(|s| s.to_string()).collect()
     }
@@ -451,8 +371,6 @@ mod tests {
             .expect("board has a live needs tail")
     }
 
-    /// Every live line in board order with the section grouping flattened - the
-    /// forest as one sequence, which is the shape most of these tests assert on.
     fn lines(v: &DepView) -> Vec<String> {
         v.sections
             .iter()
@@ -460,9 +378,6 @@ mod tests {
             .collect()
     }
 
-    /// A view marker follows the task it belongs to, everywhere that task's
-    /// name renders: its own line, and the `needs:` leaf that references it.
-    /// A task with no file carries nothing.
     #[test]
     fn view_marker_follows_the_task_through_the_forest() {
         let md = "## Open\n- 001 a\n- 002 b needs: 001\n";
@@ -476,8 +391,6 @@ mod tests {
         );
     }
 
-    /// The marker on a leaf follows the ref's own annotations, so the
-    /// condition and `(unverified)` stay attached to the label.
     #[test]
     fn view_marker_follows_leaf_annotations() {
         let md = "## Open\n- 002 api needs: 001 [pr merged]\n\n## Done\n- 001 contract\n";
@@ -490,21 +403,15 @@ mod tests {
         );
     }
 
-    /// Fork/join: 001 -> 002, 003 -> 004.
     const DIAMOND: &str = "# b\n\n## Open\n\
         - 002 api needs: 001\n\
         - 003 frontend needs: 001\n\
         - 004 e2e needs: 002, 003\n\n\
         ## Done\n- 001 contract\n";
 
-    // --- the forest ---
-
     #[test]
     fn diamond_renders_each_edge_and_the_claimable_set() {
         let v = view(DIAMOND);
-        // The fork (001 needed by both) and the join (004 needs both) are
-        // spelled out; a live task is a single leaf under another root (002
-        // under 004), expanded only at its own root - no subtree repeats.
         assert_eq!(
             lines(&v),
             vec![
@@ -527,9 +434,6 @@ mod tests {
                   ## Pending fix\n- 003 fix needs: 001\n\n\
                   ## Done\n- 001 contract\n";
         let v = view(md);
-        // One group per board section, in board order: Open, then Pending
-        // review (◐), then Pending fix (◑). Each group is its own tree, so
-        // every group's last root drops the rail and its children lose it.
         assert_eq!(
             v.sections.iter().map(|s| s.status).collect::<Vec<_>>(),
             vec![Status::Open, Status::PendingReview, Status::PendingFix]
@@ -562,7 +466,6 @@ mod tests {
                 "    └── ✓ 001 contract",
             ]
         );
-        // 002 awaits the coordinator, so it is not claimable; 003 is.
         assert_eq!(v.claimable_line, "003");
     }
 
@@ -596,15 +499,12 @@ mod tests {
         assert_eq!(v.claimable_line, "002");
     }
 
-    // --- claimable ---
-
     #[test]
     fn conditioned_ref_is_never_satisfied() {
         let md = "# b\n\n## Open\n- 002 api needs: 001 [interface PR merged]\n\n\
                   ## Done\n- 001 contract\n";
         let v = view(md);
         assert_eq!(v.claimable_line, "");
-        // The leaf looks Done but says so itself: the condition is unverified.
         assert_eq!(
             lines(&v),
             vec![
@@ -653,8 +553,6 @@ mod tests {
         assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ✓ 001 contract"]);
     }
 
-    // --- anomalies: marked at the leaf, never satisfied ---
-
     #[test]
     fn unknown_boundary_is_flagged_not_satisfied() {
         let v = view("# b\n\n## Open\n- 002 api needs: api-contract/012\n");
@@ -674,8 +572,6 @@ mod tests {
 
     #[test]
     fn unresolved_leaves_keep_their_condition() {
-        // The condition matters most exactly where the ref cannot resolve -
-        // it is what must be verified once the target appears.
         let v = view(
             "# b\n\n## Open\n- 002 api needs: 099 [interface PR merged], \
              api-contract/012 [deployed]\n",
@@ -711,16 +607,12 @@ mod tests {
         let v = view("# b\n\n## Open\n- 002 api needs: 002\n");
         assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ! itself"]);
         assert_eq!(v.claimable_line, "");
-        // A self-loop is already named by the leaf; no cycle warning on top.
         assert!(v.warning_line.is_none());
     }
 
     #[test]
     fn cycle_keeps_every_edge_and_names_the_loop_once() {
         let v = view("# b\n\n## Open\n- 002 api needs: 003\n- 003 frontend needs: 002\n");
-        // Expand-once: each side is a single leaf under the other, so the
-        // loop renders without recursing; the warning names it once, at the
-        // block's level rather than under a section.
         assert_eq!(
             lines(&v),
             vec![
@@ -747,12 +639,8 @@ mod tests {
         assert_eq!(v.claimable_line, "");
     }
 
-    // --- boards without live tails ---
-
     #[test]
     fn dependency_free_board_renders_roots_without_claimable() {
-        // No tails to gate anything: the forest is the plain root list, and
-        // a claimable row would only restate it.
         let v = view("# b\n\n## Open\n- 001 a\n- 002 b\n");
         assert_eq!(lines(&v), vec!["├── ○ 001 a", "└── ○ 002 b"]);
         assert_eq!(v.claimable_line, "");
@@ -760,7 +648,6 @@ mod tests {
 
     #[test]
     fn fully_done_board_has_no_view() {
-        // A tail on a Done task is history, not a live plan.
         assert!(view_or_none("# b\n\n## Done\n- 001 a needs: 000\n- 000 z\n").is_none());
     }
 
