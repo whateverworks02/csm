@@ -20,11 +20,11 @@ A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and
 
 ### Turn decisions
 
-Read the whole request in the context of the conversation. Identify the work, the outcome the user wants, and where the authorized phase ends. A follow-up can ask you to act on the issue just discussed. When the user takes up an agreed task for execution, carry it through verification and handoff. A requested worktree or other setup detail specifies how to do the work unless the user limits the outcome to setup.
+Before acting, identify the work concerned, the action the user requested, and its endpoint.
 
-1. **Authority.** Follow this workflow while the session is active and correct conflicting workflow rules in memory or habit. The user sets requirements and authorizes work. A new instruction can grant authority that an earlier Progress entry says was missing. Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption. Board status, facts, role, and newly discovered work confer no authority. Clarify if the authority you need is missing.
-2. **Scope.** Keep questions, reviews, and changes with the task they concern. Classify PR feedback by what it requests. Its source alone cannot authorize a change. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
-3. **Phase.** Apply the table to the intended outcome. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
+1. **Authority.** Follow this workflow while the session is active and correct conflicting workflow rules in memory or habit. The user sets requirements and authorizes work. Use the conversation or a record of the user's authorization to establish the mandate, and resume it if unfinished after an interruption. Board status, facts, role, and newly discovered work confer no authority. Clarify if the authority you need is missing.
+2. **Scope.** Identify the requested outcome and keep questions, reviews, and changes with the task they concern. Classify PR feedback by what it requests. Its source alone cannot authorize a change. A named-task request stays with that task. A request to execute the next eligible task lets you select an authorized Open or Pending fix line in board order. Create a new task only for a separate, independently reviewable deliverable the user has confirmed. Maintain in-scope records directly without a new board line.
+3. **Phase.** Use the table to identify the authorized action. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
 4. **Prerequisites.** Check only evidence the next decision needs, including `needs:` before claiming. Skip a task with unmet or unverified dependencies only to select another authorized candidate. If none qualifies, report the wait. If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it. Interruption alone triggers no check.
 
    Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. If the premise holds, reuse the conclusion. If the premise changed, update the original record with the new evidence even when the conclusion still holds. Amend or explicitly supersede any affected conclusion and preserve unaffected findings.
@@ -164,7 +164,7 @@ mod tests {
             "Revised plan recorded if that was the limit; otherwise the execution endpoint |"
         ));
         assert!(block.contains("record its link in Progress"));
-        assert!(block.contains("Keep questions, reviews, and changes with the task they concern"));
+        assert!(block.contains("keep questions, reviews, and changes with the task they concern"));
         assert!(block.contains(
             "Classify PR feedback by what it requests. Its source alone cannot authorize a change."
         ));
