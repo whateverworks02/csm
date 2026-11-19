@@ -432,9 +432,9 @@ mod tests {
         let json = serde_json::to_string(&archived).unwrap();
         assert!(json.contains("archived_at"), "{json}");
 
-        let legacy = r#"{"origin_pwd":"/o","created_at":"t","last_access":"t","pinned":false}"#;
-        let parsed: SessionMeta = serde_json::from_str(legacy).unwrap();
-        assert!(parsed.archived_at.is_none(), "legacy entry is active");
+        let minimal = r#"{"origin_pwd":"/o","created_at":"t","last_access":"t","pinned":false}"#;
+        let parsed: SessionMeta = serde_json::from_str(minimal).unwrap();
+        assert!(parsed.archived_at.is_none());
         assert!(parsed.is_registered_in("/o"));
         assert!(!parsed.is_registered_in("/other"));
     }

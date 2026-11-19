@@ -49,23 +49,6 @@ Ask the agent to record a plan, execute an agreed task, or review submitted
 work. Your request determines which step it takes. The board can track
 dependencies between tasks in the same session or across sessions.
 
-## Upgrading
-
-Run `csm init` to refresh agent instructions and hooks. If your own
-instructions tell agents to start tasks automatically from board status,
-update them to require an explicit execution request.
-
-If an older version installed `csm-plan` and `csm-scout`, remove their
-files with the commands below. Set `csm_legacy_home` to the previous csm
-data directory if it has moved.
-
-```sh
-csm_legacy_home=${CSM_HOME:-"$HOME/.csm"}
-rm -f "$HOME/.claude/skills/csm-plan/SKILL.md" \
-      "$HOME/.claude/skills/csm-scout/SKILL.md"
-rm -f "$csm_legacy_home/skills/plan.md" "$csm_legacy_home/skills/scout.md"
-```
-
 ## License
 
 [MIT](LICENSE)

@@ -376,7 +376,7 @@ pub fn read_tasks_board(name: &str) -> Option<TasksBoard> {
     read_tasks_index_md(name).map(|c| parse_tasks_board(&c))
 }
 
-/// Read the first paragraph of the first `Context` or legacy `Task` section.
+/// Return up to `max_lines` of the session summary from `state.md`.
 pub fn read_context_lines(name: &str, max_lines: usize) -> Vec<String> {
     let content = match read_state_md(name) {
         Some(c) => c,
@@ -623,16 +623,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn read_context_lines_falls_back_to_legacy_task_section() {
+    fn read_context_lines_reads_task_heading() {
         with_csm_home(|_dir| {
             let meta = touch_session("ws", "/o").unwrap();
             ensure_workspace("ws", &meta).unwrap();
             fs::write(
                 session_dir("ws").unwrap().join("state.md"),
-                "# ws - state\n\n## Task\nlegacy task line.\n",
+                "# ws - state\n\n## Task\ntask summary.\n",
             )
             .unwrap();
-            assert_eq!(read_context_lines("ws", 5), vec!["legacy task line."]);
+            assert_eq!(read_context_lines("ws", 5), vec!["task summary."]);
         });
     }
 
