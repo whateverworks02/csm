@@ -1,21 +1,4 @@
-//! csm - workspace memory for coding agents.
-//!
-//! Three pillars:
-//!   1. A kv index of sessions (`~/.csm/index.json`).
-//!   2. A per-session workspace memory directory (`~/.csm/sessions/<name>/`).
-//!   3. A carefully maintained working-mode prompt injected into the global
-//!      `~/.claude/CLAUDE.md` (by `csm init`), plus a SessionStart hook that
-//!      auto-injects the active session's `state.md`.
-//!
-//! Launching: `csm <name>` sets up / refreshes the session, then launches the
-//! agent via a per-agent adapter (`--agent`, default `claude`). Without a
-//! name, csm offers a picker for local and cross-repo sessions - bare `csm`
-//! or `csm -a <agent>` (which is how csx/cso/csp-style
-//! shell shortcuts get the picker when called bare). The Claude
-//! adapter runs `claude` with `CSM_SESSION=<name>`; on `/clear`, Claude Code
-//! fires SessionStart again (source=clear), the hook reads `CSM_SESSION` (still
-//! set, same process) and re-injects `state.md` - reviving the workspace memory.
-//! Other agents (e.g. `pi`) inject at launch instead; see `agent.rs`.
+//! Command-line entry point for csm.
 
 use csm::{agent, doctor, gc, hook, inject, markdown, needs, store, ui, workspace};
 
@@ -190,9 +173,6 @@ fn try_main() -> Result<()> {
     }
 }
 
-/// `csm archive <name>` / `csm unarchive <name>`: flip the archive state,
-/// reporting whether this call changed it. Archiving is reversible and leaves
-/// the workspace in place, so neither asks for confirmation.
 fn cmd_set_archived(name: &str, archived: bool) -> Result<()> {
     let (verb, state) = if archived {
         ("archived", "already archived")
@@ -208,8 +188,7 @@ fn cmd_set_archived(name: &str, archived: bool) -> Result<()> {
 }
 
 fn cmd_start(name: &str, agent: &str) -> Result<()> {
-    // Resolve the agent adapter first so an unknown agent id errors before we
-    // create or touch any session.
+    // Validate the agent before creating or touching the session.
     let agent_adapter = agent::agent_for(agent)?;
 
     let cwd = std::env::current_dir().context("getting current dir")?;
@@ -217,7 +196,6 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
 
     let (meta, revived) = store::touch_session_reviving(name, &origin_pwd)?;
     if revived {
-        // Naming an archived session is an explicit request to work on it.
         ui::done("unarchived", name);
     }
     workspace::ensure_workspace(name, &meta)?;
@@ -247,9 +225,6 @@ fn spawn_agent(name: &str, agent_adapter: &dyn agent::Agent) -> Result<std::proc
         ui::epaint(ui::DIM, &ui::abbrev_path(&dir)),
     );
 
-    // Launch the agent via its adapter. Each adapter decides binary, args,
-    // env, and how/when state is injected (Claude: env + SessionStart hook;
-    // pi: --append-system-prompt at launch).
     eprintln!(
         "{}",
         ui::epaint(ui::DIM, &format!("launching {}...", agent_adapter.id())),
@@ -265,45 +240,31 @@ fn wait_for_agent(mut child: std::process::Child) -> Result<()> {
     std::process::exit(status.code().unwrap_or(1));
 }
 
-/// Parse `csm <name> [--agent <x>|-a <x>|--agent=<x>]` from the
-/// external-subcommand arg vec. Both parts are optional: a missing name falls
-/// back to the cwd picker (`cmd_pick_here`), a missing agent defaults to
-/// "claude" (`resolve_agent`). An explicitly empty name token (`csm ""`, e.g.
-/// an unexpanded shell variable) errors instead - silently reinterpreting it
-/// as "no name" would hang scripts on the picker's stdin. The leading form
-/// `csm -a <x> <name>` never reaches here - clap claims the root flag before
-/// the external subcommand starts.
+/// Parse trailing launch arguments captured by clap's external subcommand.
 fn parse_start_args(args: Vec<String>) -> Result<(Option<String>, Option<String>)> {
     let mut name = None;
     let mut agent = None;
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if let Some(v) = a.strip_prefix("--agent=") {
-            agent = merge_agent(agent, v.to_string())?;
-        } else if a == "--agent" || a == "-a" {
-            i += 1;
-            let v = args
-                .get(i)
-                .cloned()
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--agent=") {
+            agent = merge_agent(agent, value.to_string())?;
+        } else if arg == "--agent" || arg == "-a" {
+            let value = args
+                .next()
                 .ok_or_else(|| anyhow::anyhow!("--agent requires a value"))?;
-            agent = merge_agent(agent, v)?;
+            agent = merge_agent(agent, value)?;
         } else if name.is_none() {
-            if a.is_empty() {
+            if arg.is_empty() {
                 anyhow::bail!("missing session name");
             }
-            name = Some(a.clone());
+            name = Some(arg);
         } else {
-            anyhow::bail!("unexpected argument: {a:?} (usage: csm <name> [--agent <x>])");
+            anyhow::bail!("unexpected argument: {arg:?} (usage: csm <name> [--agent <x>])");
         }
-        i += 1;
     }
     Ok((name, agent))
 }
 
-/// Fold one trailing `--agent` value into the accumulator: repeating the same
-/// id is fine, a different id conflicts (mirrors `resolve_agent`, which
-/// arbitrates between the leading and trailing spellings).
 fn merge_agent(agent: Option<String>, v: String) -> Result<Option<String>> {
     if let Some(prev) = &agent {
         if prev != &v {
@@ -313,13 +274,7 @@ fn merge_agent(agent: Option<String>, v: String) -> Result<Option<String>> {
     Ok(Some(v))
 }
 
-/// Combine the two `--agent` spellings into one id: the leading root flag
-/// (`csm -a pi <name>`, parsed by clap) and the trailing form inside the
-/// external-subcommand vec (`csm <name> -a pi`, parsed by `parse_start_args`).
-/// The same value via both spellings is fine; two different values are a user
-/// error. Defaults to "claude". Validates ids first so an unknown id (e.g.
-/// "PI") reports as `unknown agent` rather than as a conflict against a
-/// valid id.
+/// Validate both agent IDs before checking for conflicts between flag positions.
 fn resolve_agent(root: Option<String>, parsed: Option<String>) -> Result<String> {
     if let Some(a) = &root {
         agent::agent_for(a)?;
@@ -337,7 +292,6 @@ fn resolve_agent(root: Option<String>, parsed: Option<String>) -> Result<String>
     }
 }
 
-/// Pick a local or cross-repo session to launch in the calling directory.
 fn cmd_pick_here(agent: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let cwd_str = cwd.display().to_string();
@@ -468,7 +422,6 @@ fn print_session_choices(label: &str, rows: &[(&String, &store::SessionMeta)]) {
     }
 }
 
-/// Pick an active session for a command that only needs its name.
 fn pick_session(label: &str, rows: &[(&String, &store::SessionMeta)]) -> Result<Option<String>> {
     print_session_choices(label, rows);
     let line = read_picker_input(&format!("select a session (1-{}), 'q' to quit", rows.len()))?;
@@ -489,8 +442,6 @@ fn pick_session(label: &str, rows: &[(&String, &store::SessionMeta)]) -> Result<
     }
 }
 
-/// Picker over all active sessions. Prints a hint and returns `None` if there
-/// are no sessions, every session is archived, or the user aborted.
 fn pick_session_all() -> Result<Option<String>> {
     let idx = store::load_index()?;
     if idx.sessions.is_empty() {
@@ -505,11 +456,7 @@ fn pick_session_all() -> Result<Option<String>> {
     pick_session("all sessions", &rows)
 }
 
-/// Resolve a session name from an optional arg: an explicit name wins;
-/// otherwise `$CSM_SESSION`; otherwise the interactive picker. Returns
-/// `Ok(None)` only when the picker was offered and the user aborted (the
-/// caller should then return cleanly). Does not validate the name exists -
-/// callers validate when they look up session data.
+/// Resolve an explicit name, then `$CSM_SESSION`, then the interactive picker.
 fn resolve_session_name(name: Option<String>) -> Result<Option<String>> {
     match name {
         Some(n) => Ok(Some(n)),
@@ -520,9 +467,6 @@ fn resolve_session_name(name: Option<String>) -> Result<Option<String>> {
     }
 }
 
-/// The stamp a `csm list` row shows, and the sort key for its mode:
-/// `archived_at` in the archived listing, `last_access` in the active one.
-/// One rule for both, so the order always matches the visible column.
 fn shown_stamp(meta: &store::SessionMeta, archived: bool) -> &str {
     if archived {
         meta.archived_at.as_deref().unwrap_or("")
@@ -531,8 +475,6 @@ fn shown_stamp(meta: &store::SessionMeta, archived: bool) -> &str {
     }
 }
 
-/// The rows `csm list` shows: active sessions by default, archived ones with
-/// `archived`, each most-recent-first on the timestamp its column displays.
 fn list_rows(idx: &store::Index, archived: bool) -> Vec<(&String, &store::SessionMeta)> {
     let mut rows: Vec<_> = idx
         .sessions
@@ -649,9 +591,6 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// `csm rename <old> <new>`: rename a session and re-point its `origin_pwd` to
-/// the current directory, so bare `csm` lists it here. Does not launch claude.
-/// `csm rename <name> <name>` is a pure re-home (rename to itself).
 fn cmd_rename(old: &str, new: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let origin_pwd = cwd.display().to_string();
@@ -686,11 +625,8 @@ fn cmd_rename(old: &str, new: &str) -> Result<()> {
     Ok(())
 }
 
-/// Width of the dim label column in the `csm show` card.
 const CARD_LABEL_WIDTH: usize = 11;
 
-/// One `csm show` card row: `  <dim label padded to CARD_LABEL_WIDTH> <value>`.
-/// `value` is already styled by the caller.
 fn card_row(label: &str, value: &str) {
     println!(
         "  {} {}",
@@ -702,23 +638,15 @@ fn card_row(label: &str, value: &str) {
     );
 }
 
-/// Render a card row with one or more value lines: the first line carries the
-/// label, continuation lines indent under the value column. "(none)" when empty.
-/// Shared by the `context` row (truncated state.md lines) and the `tasks`
-/// block (summary bar + dependency forest + done line) so the
-/// label/continuation layout can't drift between them.
 fn card_multiline_row(label: &str, lines: &[String]) {
-    let cont = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
-    if lines.is_empty() {
+    let Some((first, rest)) = lines.split_first() else {
         card_row(label, &ui::paint(ui::DIM, "(none)"));
         return;
-    }
-    for (i, val) in lines.iter().enumerate() {
-        if i == 0 {
-            card_row(label, val);
-        } else {
-            println!("{}{}", cont, val);
-        }
+    };
+    card_row(label, first);
+    let continuation = " ".repeat(2 + CARD_LABEL_WIDTH + 1);
+    for value in rest {
+        println!("{continuation}{value}");
     }
 }
 
@@ -728,9 +656,6 @@ fn cmd_show(name: Option<String>) -> Result<()> {
     };
     let meta = store::require_session(&name)?;
 
-    // Card: name, then one row per field. Labels dim + fixed-width so values
-    // align; metadata recedes (dim), context/open/done carry the recognition
-    // signal (normal weight). No icons, no raw markdown - a glance should suffice.
     println!("{}", ui::paint(ui::CYAN_BOLD, &name));
     card_row(
         "origin",
@@ -751,17 +676,9 @@ fn cmd_show(name: Option<String>) -> Result<()> {
         card_row("archived", &ui::paint(ui::DIM, &store::format_ts(ts)));
     }
 
-    // context - first paragraph of the Context section; the recognizer. (Falls
-    // back to a legacy `## Task` section for pre-tasks-model sessions.)
     card_multiline_row("context", &session_context_lines(&name));
 
-    // tasks - the board is the operational center, rendered as one block: the
-    // summary bar, then every non-empty section under its own label. `claimable`
-    // turns the live sections into a decision: what can be claimed now.
     let board = workspace::read_tasks_board(&name).unwrap_or_default();
-    // Views ride on the tasks block: a task that has a human-facing page
-    // carries its marker, a task without one carries nothing. The view's
-    // filename names the task, so no task file or registry has to be read.
     let view_ids = workspace::view_task_ids(&name);
     let (lines, claimable) = tasks_block_lines(&board, &name, &view_ids);
     card_multiline_row("tasks", &lines);
@@ -778,21 +695,12 @@ fn session_context_lines(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// The `tasks` block's lines, plus the `claimable` row's value. The block is
-/// the board rendered by its own sections: a summary bar, then every non-empty
-/// section under its label - the live ones as the `needs:` forest (the one
-/// mapping the agents read, so the view cannot drift from the plan), Done as
-/// one head per line. An empty board leaves the block empty, which the caller
-/// shows as a dim `(none)`. Cross-session refs resolve against each foreign
-/// board, read at most once per session regardless of how many refs point into
-/// it.
 fn tasks_block_lines(
     board: &workspace::TasksBoard,
     name: &str,
     view_ids: &HashSet<String>,
 ) -> (Vec<String>, String) {
-    let total =
-        board.open.len() + board.pending_review.len() + board.pending_fix.len() + board.done.len();
+    let total = board.entry_count();
     let mut lines: Vec<String> = Vec::new();
     if total > 0 {
         lines.push(tasks_summary_line(board));
@@ -811,38 +719,25 @@ fn tasks_block_lines(
         },
         view_ids,
     ) {
-        for section in &view.sections {
+        for section in view.sections {
             lines.push(section_label(section.status));
-            lines.extend(section.lines.iter().cloned());
+            lines.extend(section.lines);
         }
-        // A cycle spans sections, so its warning closes the live part of the
-        // block instead of sitting under one section's label.
-        if let Some(warning) = &view.warning_line {
-            lines.push(warning.clone());
-        }
+        lines.extend(view.warning_line);
         claimable = view.claimable_line;
     }
     lines.extend(tasks_done_section(board, view_ids));
     (lines, claimable)
 }
 
-/// A section label inside the tasks block: the board's own section name, dim -
-/// the structure recedes, the task nodes carry the eye.
 fn section_label(status: workspace::Status) -> String {
     ui::paint(ui::DIM, status.label())
 }
 
-/// Width of the progress bar in the `csm show` tasks summary.
 const TASKS_BAR_WIDTH: usize = 20;
 
-/// The `tasks` block's summary line: a 20-cell bar (filled = done share,
-/// rounded) plus `N/M done`, with `· K review` / `· K fix` counts when
-/// nonzero. Open needs no count - the roots below show it. Callers show a
-/// dim `(none)` instead when the board has no entries.
 fn tasks_summary_line(board: &workspace::TasksBoard) -> String {
-    let total =
-        board.open.len() + board.pending_review.len() + board.pending_fix.len() + board.done.len();
-    // checked_div: a total of 0 (empty board) yields 0 filled, not a panic.
+    let total = board.entry_count();
     let filled = (TASKS_BAR_WIDTH * board.done.len() + total / 2)
         .checked_div(total)
         .unwrap_or(0);
@@ -856,9 +751,6 @@ fn tasks_summary_line(board: &workspace::TasksBoard) -> String {
     s
 }
 
-/// The summary bar's `[...]`: filled cells green, empty cells dim. A
-/// zero-width side is left unpainted - a bare SGR pair around nothing is
-/// escape noise on 0-done and all-done boards.
 fn tasks_bar(filled: usize) -> String {
     let mut bar = String::from("[");
     if filled > 0 {
@@ -872,54 +764,25 @@ fn tasks_bar(filled: usize) -> String {
     bar
 }
 
-/// The leading id token of a board head (`entry_head` output) - what a view
-/// binds to, and the token the sort key parses.
-fn head_id(head: &str) -> &str {
-    head.split_whitespace().next().unwrap_or("")
-}
-
-/// Sort key for a board head: its leading id token, numerically when it
-/// parses - ids are not zero-padded, so text order would put `10` before
-/// `9`. Non-numeric ids sort after numeric ones, by text.
-fn head_id_key(head: &str) -> (Option<u64>, &str) {
-    let id = head_id(head);
-    (id.parse().ok(), id)
-}
-
-/// How many done tasks the card's Done section lists before folding the rest
-/// into a `… +K more` tail. The summary bar already carries the count; the
-/// section is there to find a finished task, not to read the archive (the raw
-/// `tasks/INDEX.md` holds the rest).
 const DONE_LINES_MAX: usize = 8;
 
-/// The tasks block's Done section: the section label, then one dim
-/// `<id> <slug>` line per done task, in numeric id order, capped at
-/// `DONE_LINES_MAX` with a dim `… +K more` tail. Empty when nothing is done -
-/// the block never prints a label with no line under it. A view marker rides
-/// its line.
 fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>) -> Vec<String> {
     if board.done.is_empty() {
         return Vec::new();
     }
-    let mut heads: Vec<&str> = board
-        .done
-        .iter()
-        .map(|e| workspace::entry_head(e))
-        .collect();
-    heads.sort_by(|a, b| head_id_key(a).cmp(&head_id_key(b)));
-    // Dim per piece, never over an enclosing span: each marker carries its own
-    // reset, and a reset inside a span ends that span - the rest of the line
-    // would come back at full intensity, which is the one thing a dim section
-    // exists to avoid.
+    let mut entries: Vec<&str> = board.done.iter().map(String::as_str).collect();
+    entries.sort_by_key(|&entry| workspace::entry_id_key(entry));
     let mut lines = vec![section_label(workspace::Status::Done)];
-    for head in heads.iter().take(DONE_LINES_MAX) {
+    // Style each piece separately because the view marker emits its own ANSI reset.
+    for &entry in entries.iter().take(DONE_LINES_MAX) {
+        let has_view = view_ids.contains(workspace::entry_id(entry).unwrap_or(""));
         lines.push(format!(
             "{}{}",
-            ui::paint(ui::DIM, head),
-            needs::view_mark(view_ids.contains(head_id(head)))
+            ui::paint(ui::DIM, workspace::entry_head(entry)),
+            needs::view_mark(has_view)
         ));
     }
-    let hidden = heads.len().saturating_sub(DONE_LINES_MAX);
+    let hidden = entries.len().saturating_sub(DONE_LINES_MAX);
     if hidden > 0 {
         lines.push(ui::paint(ui::DIM, &format!("… +{hidden} more")));
     }
@@ -927,8 +790,6 @@ fn tasks_done_section(board: &workspace::TasksBoard, view_ids: &HashSet<String>)
 }
 
 fn cmd_init() -> Result<()> {
-    // Install every known agent's global state-injection wiring (Claude's
-    // SessionStart hook + CLAUDE.md, pi's CLAUDE.md). Idempotent.
     agent::install_all()?;
     match inject::which_csm() {
         Some(p) => ui::step("found", &format!("csm on PATH at {}", ui::abbrev_path(&p))),
@@ -948,11 +809,6 @@ mod tests {
         v.iter().map(|x| x.to_string()).collect()
     }
 
-    /// The clap contract the launch flow depends on: a leading `-a/--agent`
-    /// is parsed as the root flag (so bare `csm -a pi` reaches the picker
-    /// path instead of dying on the external-subcommand dash rule), while
-    /// everything after the session name is captured raw into the external
-    /// vec for `parse_start_args`.
     #[test]
     fn leading_agent_flag_parses_as_root() {
         for argv in [
@@ -970,7 +826,6 @@ mod tests {
     fn leading_agent_flag_before_name() {
         let cli = Cli::parse_from(["csm", "-a", "pi", "foo"]);
         match cli.command {
-            // the external vec keeps only the name; the flag was claimed by clap
             Some(Cmd::Other(v)) => assert_eq!(v, s(&["foo"])),
             _ => panic!("expected external subcommand"),
         }
@@ -1003,11 +858,9 @@ mod tests {
 
     #[test]
     fn parse_start_args_forms() {
-        // name only
         let (name, agent) = parse_start_args(s(&["foo"])).unwrap();
         assert_eq!(name.as_deref(), Some("foo"));
         assert_eq!(agent, None);
-        // trailing agent, all spellings
         for args in [
             vec!["foo", "-a", "pi"],
             vec!["foo", "--agent", "pi"],
@@ -1017,7 +870,6 @@ mod tests {
             assert_eq!(name.as_deref(), Some("foo"), "{args:?}");
             assert_eq!(agent.as_deref(), Some("pi"), "{args:?}");
         }
-        // empty = picker fallback, no error
         let (name, agent) = parse_start_args(s(&[])).unwrap();
         assert_eq!(name, None);
         assert_eq!(agent, None);
@@ -1025,21 +877,17 @@ mod tests {
 
     #[test]
     fn parse_start_args_rejects_bad_input() {
-        assert!(parse_start_args(s(&["foo", "bar"])).is_err()); // two names
-        assert!(parse_start_args(s(&["foo", "-a"])).is_err()); // flag without value
-                                                               // an empty name token is a missing name (e.g. unexpanded shell var),
-                                                               // not a picker fallback - see the doc comment on parse_start_args
+        assert!(parse_start_args(s(&["foo", "bar"])).is_err());
+        assert!(parse_start_args(s(&["foo", "-a"])).is_err());
         let err = parse_start_args(s(&[""])).unwrap_err().to_string();
         assert!(err.contains("missing session name"), "{err}");
     }
 
     #[test]
     fn parse_start_args_repeated_trailing_agent() {
-        // same id repeated is fine
         let (name, agent) = parse_start_args(s(&["foo", "-a", "pi", "-a", "pi"])).unwrap();
         assert_eq!(name.as_deref(), Some("foo"));
         assert_eq!(agent.as_deref(), Some("pi"));
-        // different ids conflict, same as the leading/trailing cross-form
         let err = parse_start_args(s(&["foo", "-a", "pi", "--agent", "codex"]))
             .unwrap_err()
             .to_string();
@@ -1051,7 +899,6 @@ mod tests {
         assert_eq!(resolve_agent(None, None).unwrap(), "claude");
         assert_eq!(resolve_agent(None, Some("pi".into())).unwrap(), "pi");
         assert_eq!(resolve_agent(Some("pi".into()), None).unwrap(), "pi");
-        // same id via both spellings is not a conflict
         assert_eq!(
             resolve_agent(Some("pi".into()), Some("pi".into())).unwrap(),
             "pi"
@@ -1065,15 +912,11 @@ mod tests {
 
     #[test]
     fn resolve_agent_reports_unknown_id_before_conflict() {
-        // "PI" is an unknown id, not a different agent - say so instead of
-        // reporting a bogus conflict against the valid "pi"
         let err = resolve_agent(Some("PI".into()), Some("pi".into()))
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown agent"), "{err}");
     }
-
-    // --- archive surfaces ---
 
     #[test]
     fn cli_parses_list_archive_and_unarchive() {
@@ -1107,8 +950,6 @@ mod tests {
         }
     }
 
-    /// `csm list` shows one state at a time, ordered by the stamp its column
-    /// displays - `last_access` for active, `archived_at` for archived.
     #[test]
     fn list_rows_filters_by_archive_and_sorts_by_shown_stamp() {
         let mut idx = store::Index::default();
@@ -1139,9 +980,6 @@ mod tests {
         assert_eq!(names(true), vec!["archived-new", "archived-old"]);
     }
 
-    // --- tasks block: summary bar, sections, done lines (color is off under
-    // test capture) ---
-
     fn board(md: &str) -> workspace::TasksBoard {
         workspace::parse_tasks_board(md)
     }
@@ -1152,7 +990,6 @@ mod tests {
             "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
              ## Pending fix\n- 003 c\n\n## Done\n- 000 d\n",
         );
-        // 1/4 done -> round(20/4) = 5 filled; review + fix counts ride along.
         assert_eq!(
             tasks_summary_line(&b),
             "[█████░░░░░░░░░░░░░░░] 1/4 done · 1 review · 1 fix"
@@ -1163,10 +1000,8 @@ mod tests {
     fn tasks_summary_line_full_and_empty_share() {
         let all = board("## Done\n- 000 a\n- 001 b\n- 002 c\n");
         assert_eq!(tasks_summary_line(&all), "[████████████████████] 3/3 done");
-        // Zero review/fix: no suffixes.
         let none = board("## Open\n- 001 a\n- 002 b\n- 003 c\n");
         assert_eq!(tasks_summary_line(&none), "[░░░░░░░░░░░░░░░░░░░░] 0/3 done");
-        // 2/6 done -> round(6.67) = 7 filled.
         let two =
             board("## Open\n- 002 a\n- 003 b\n- 004 c\n- 005 d\n\n## Done\n- 000 e\n- 001 f\n");
         assert_eq!(tasks_summary_line(&two), "[███████░░░░░░░░░░░░░] 2/6 done");
@@ -1188,15 +1023,11 @@ mod tests {
 
     #[test]
     fn tasks_done_section_lists_one_head_per_line_sorted_by_id() {
-        // A line is the task's head - no marker unless the task has a view -
-        // and the order is numeric: ids are not zero-padded, so text order
-        // would put `10` before `9`.
         let b = board("## Done\n- 004 d\n- 10 j\n- 9 i\n- 002 b needs: 001\n- 001 a\n");
         assert_eq!(
             tasks_done_section(&b, &HashSet::new()),
             vec!["Done", "001 a", "002 b", "004 d", "9 i", "10 j"]
         );
-        // Nothing done: no section, so no label without a line under it.
         assert!(tasks_done_section(&board("## Open\n- 001 a\n"), &HashSet::new()).is_empty());
     }
 
@@ -1207,7 +1038,6 @@ mod tests {
             md.push_str(&format!("- {i:03} t\n"));
         }
         let lines = tasks_done_section(&board(&md), &HashSet::new());
-        // The label, the capped heads, then the tail counting the rest.
         assert_eq!(lines.len(), DONE_LINES_MAX + 2);
         assert_eq!(lines[1], "000 t");
         assert_eq!(lines[DONE_LINES_MAX], "007 t");
@@ -1240,8 +1070,6 @@ mod tests {
 
     #[test]
     fn tasks_bar_skips_zero_width_sides() {
-        // 0-done and all-done boards paint one side with nothing; the
-        // string still renders the full 20 cells either way.
         assert_eq!(tasks_bar(0), "[░░░░░░░░░░░░░░░░░░░░]");
         assert_eq!(tasks_bar(TASKS_BAR_WIDTH), "[████████████████████]");
         assert_eq!(tasks_bar(7), "[███████░░░░░░░░░░░░░]");

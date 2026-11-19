@@ -1,19 +1,4 @@
-//! csm home layout, the kv index, and session metadata.
-//!
-//! Layout (`workspace::SCAFFOLD` is what the per-session part is created
-//! from, and is authoritative - this is a reading map, not a second list):
-//!   ~/.csm/
-//!     index.json          - session metadata, including directories and sprint membership
-//!     sessions/<name>/
-//!       state.md
-//!       scripts/INDEX.md
-//!       scripts/...
-//!       notes/INDEX.md
-//!       notes/...
-//!       views/INDEX.md
-//!       views/...
-//!       tasks/INDEX.md
-//!       tasks/...
+//! Session metadata and the on-disk index.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
@@ -31,11 +16,8 @@ pub struct SessionMeta {
     pub created_at: String,
     pub last_access: String,
     pub pinned: bool,
-    /// Archive stamp; absent = active. Archived sessions stay on disk and are
-    /// skipped by the daily surfaces and `gc`; naming one revives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<String>,
-    /// Whether the session was explicitly selected for the sprint.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub in_sprint: bool,
 }
@@ -45,8 +27,6 @@ impl SessionMeta {
         self.origin_pwd == dir || self.registered_dirs.iter().any(|path| path == dir)
     }
 
-    /// Whether the session is archived (off the daily surfaces, exempt from
-    /// `gc`). The one definition of the split the surfaces filter on.
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
     }
@@ -58,9 +38,6 @@ pub struct Index {
     pub sessions: BTreeMap<String, SessionMeta>,
 }
 
-/// Root of csm's on-disk data. `$CSM_HOME` overrides the default `~/.csm`
-/// (mirrors `CARGO_HOME` / `RUSTUP_HOME` / `STARSHIP_CONFIG`): enables data
-/// relocation + test isolation. Empty/unset falls back to `$HOME/.csm`.
 pub fn csm_home() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("CSM_HOME") {
         if !p.is_empty() {
@@ -91,8 +68,6 @@ pub fn parse_time(s: &str) -> Result<DateTime<Local>> {
     Ok(DateTime::parse_from_rfc3339(s)?.with_timezone(&Local))
 }
 
-/// Format a stored timestamp (`last_access`/`created_at`) for display,
-/// falling back to the raw string if it can't be parsed.
 pub fn format_ts(ts: &str) -> String {
     parse_time(ts)
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
@@ -114,8 +89,7 @@ pub fn load_index() -> Result<Index> {
     Ok(idx)
 }
 
-/// Acquire the writer lock before reading; keep the returned file open
-/// through the save. The lock file stays in place when the index is replaced.
+/// Lock before loading the index. Keep the file open through the write.
 fn load_index_for_update() -> Result<(File, Index)> {
     let home = csm_home()?;
     std::fs::create_dir_all(&home)?;
@@ -141,9 +115,6 @@ fn save_index(idx: &Index) -> Result<()> {
     Ok(())
 }
 
-/// Look up a session's metadata, erroring if it doesn't exist. The shared
-/// session lookup; centralizes the `no csm session named` message so callers
-/// don't re-string it.
 pub fn require_session(name: &str) -> Result<SessionMeta> {
     let idx = load_index()?;
     idx.sessions
@@ -152,18 +123,10 @@ pub fn require_session(name: &str) -> Result<SessionMeta> {
         .with_context(|| format!("no csm session named {:?}", name))
 }
 
-/// Create the session if missing, refresh `last_access`, persist, return meta.
-/// `origin_pwd` is only used at creation; it is never overwritten. Touching
-/// revives an archived session (clears `archived_at`); use
-/// [`touch_session_reviving`] when the caller must report the revival.
 pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
     Ok(touch_session_reviving(name, origin_pwd)?.0)
 }
 
-/// `touch_session`, additionally reporting whether the touch revived an
-/// archived session (`true` when `archived_at` was cleared). Naming a session
-/// is an explicit request to work on it, so starting/resuming revives it;
-/// `cmd_start` prints the revival notice from this flag.
 pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMeta, bool)> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
@@ -185,7 +148,7 @@ pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMe
     Ok((clone, revived))
 }
 
-/// Prepare an active picker selection and hold the lock until the agent starts.
+/// Revalidate a picker selection and hold the lock through agent startup.
 pub fn start_picked_session<T>(
     name: &str,
     created_at: &str,
@@ -209,10 +172,7 @@ pub fn start_picked_session<T>(
     start()
 }
 
-/// Like `touch_session` but never creates: returns `None` if the session does
-/// not exist. Used by the SessionStart hook, which must not create sessions
-/// for unknown `$CSM_SESSION` values. Leaves `archived_at` alone - only an
-/// explicit resume revives.
+/// Refresh access time without creating a session or reviving an archived one.
 pub fn touch_if_exists(name: &str) -> Result<Option<SessionMeta>> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = match idx.sessions.get_mut(name) {
@@ -225,7 +185,6 @@ pub fn touch_if_exists(name: &str) -> Result<Option<SessionMeta>> {
     Ok(Some(clone))
 }
 
-/// Update the pinned flag. Errors if the session does not exist.
 pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
@@ -236,10 +195,6 @@ pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
     save_index(&idx)
 }
 
-/// Archive or unarchive a session; errors if it does not exist. Returns whether
-/// the state changed: archiving an already-archived session leaves its original
-/// `archived_at` untouched and returns `false` (symmetrically for unarchive),
-/// so a repeated command reports the existing state instead of resetting it.
 pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
@@ -248,14 +203,12 @@ pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
         .with_context(|| format!("no csm session named {:?}", name))?;
     let changed = archived != meta.is_archived();
     if changed {
-        // Only a transition writes; a repeat keeps the existing stamp.
         meta.archived_at = archived.then(now_iso);
         save_index(&idx)?;
     }
     Ok(changed)
 }
 
-/// Update sprint membership without changing the session's access or archive state.
 pub fn set_in_sprint(name: &str, in_sprint: bool) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
@@ -275,12 +228,7 @@ pub fn set_in_sprint(name: &str, in_sprint: bool) -> Result<()> {
     Ok(())
 }
 
-/// Rename a session and re-point its `origin_pwd` to `new_origin_pwd`.
-///
-/// Moves the workspace dir (`<old>` -> `<new>`) and re-keys the index entry,
-/// preserving `created_at` and `pinned`; refreshes `last_access`. Errors if
-/// `old` doesn't exist or `new` already exists. If `old == new`, only re-points
-/// `origin_pwd` (a pure re-home, no dir move).
+/// Rename and re-home a session. Equal names only update its origin and access time.
 pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
 
@@ -304,7 +252,7 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
         .with_context(|| format!("no csm session named {:?}", old))?
         .clone();
 
-    // Move the workspace dir before mutating the index (fail cleanly).
+    // Move the workspace before updating the index so a failed move leaves it intact.
     let old_dir = session_dir(old)?;
     let new_dir = session_dir(new)?;
     if new_dir.exists() {
@@ -324,7 +272,6 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
     Ok(())
 }
 
-/// Hard-delete a session: remove its workspace dir and index entry.
 pub fn delete_session(name: &str) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
     if !idx.sessions.contains_key(name) {
@@ -389,7 +336,6 @@ mod tests {
     #[test]
     fn parse_time_valid_preserves_instant() {
         let dt = parse_time("2026-07-30T15:04:56+00:00").unwrap();
-        // The instant is timezone-independent.
         assert_eq!(dt.timestamp(), 1785423896);
     }
 
@@ -406,8 +352,6 @@ mod tests {
 
     #[test]
     fn format_ts_reformats_valid_input() {
-        // Rendered in the local zone, so assert shape (not the exact string) to
-        // stay TZ-independent: "%Y-%m-%d %H:%M" is always 16 chars.
         let out = format_ts("2026-07-30T15:04:56+00:00");
         assert_ne!(out, "2026-07-30T15:04:56+00:00");
         assert_eq!(out.len(), 16);
@@ -418,9 +362,6 @@ mod tests {
         assert_eq!(b[13], b':');
     }
 
-    // --- store CRUD integration (isolated $CSM_HOME) ---
-
-    /// Read the session's state.md as a marker (proves a dir wasn't rewritten).
     fn state_marker(name: &str) -> String {
         std::fs::read_to_string(session_dir(name).unwrap().join("state.md")).unwrap()
     }
@@ -433,8 +374,6 @@ mod tests {
             assert_eq!(meta.origin_pwd, "/orig");
             assert!(!meta.pinned);
 
-            // A second touch with a different origin must not overwrite the
-            // original - origin_pwd is set only at creation.
             let _ = touch_session("a", "/different").unwrap();
             assert_eq!(require_session("a").unwrap().origin_pwd, "/orig");
         });
@@ -472,10 +411,6 @@ mod tests {
         });
     }
 
-    // --- archive ---
-
-    /// Active sessions omit `archived_at` from `index.json`; archived ones
-    /// carry it; a legacy entry without the key loads as active.
     #[test]
     fn session_meta_archived_at_serializes_sparsely() {
         let active = SessionMeta {
@@ -511,7 +446,6 @@ mod tests {
             touch_session("a", "/o").unwrap();
             assert!(set_archived("a", true).unwrap());
             let first = require_session("a").unwrap().archived_at.unwrap();
-            // Repeating archive preserves the original stamp.
             assert!(!set_archived("a", true).unwrap());
             assert_eq!(require_session("a").unwrap().archived_at.unwrap(), first);
 
@@ -549,8 +483,6 @@ mod tests {
         with_csm_home(|_dir| {
             touch_session("a", "/o").unwrap();
             set_archived("a", true).unwrap();
-            // The SessionStart hook refreshes last_access only; archive is a
-            // user-facing state, not something a hook clears.
             let meta = touch_if_exists("a").unwrap().expect("known session");
             assert!(meta.archived_at.is_some());
             assert!(require_session("a").unwrap().archived_at.is_some());
@@ -616,7 +548,6 @@ mod tests {
             let dir_before = session_dir("a").unwrap();
             let marker = state_marker("a");
 
-            // old == new: re-point origin_pwd, no dir move, no rewrite.
             rename_session("a", "a", "/new").unwrap();
             assert_eq!(require_session("a").unwrap().origin_pwd, "/new");
             assert_eq!(session_dir("a").unwrap(), dir_before);
@@ -631,7 +562,6 @@ mod tests {
             touch_session("a", "/oa").unwrap();
             touch_session("b", "/ob").unwrap();
             assert!(rename_session("a", "b", "/x").is_err());
-            // Both sessions unchanged.
             assert_eq!(require_session("a").unwrap().origin_pwd, "/oa");
             assert_eq!(require_session("b").unwrap().origin_pwd, "/ob");
         });

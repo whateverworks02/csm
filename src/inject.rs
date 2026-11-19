@@ -1,6 +1,4 @@
-//! Idempotent injection of the csm working-mode prompt into the global
-//! `~/.claude/CLAUDE.md` (via `csm init`). The block is wrapped in marker
-//! comments so re-running refreshes it in place.
+//! Install global prompts and SessionStart hooks for supported agents.
 
 use crate::prompt::{csm_block, CSM_MARK_BEGIN, CSM_MARK_END};
 use crate::ui;
@@ -8,35 +6,24 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Path to the global user claude config dir (`~/.claude`).
 pub fn claude_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".claude"))
 }
 
-/// Path to the global user CLAUDE.md (`~/.claude/CLAUDE.md`).
 pub fn claude_md_path() -> Result<PathBuf> {
     Ok(claude_dir()?.join("CLAUDE.md"))
 }
 
-/// Path to the pi global agent dir (`~/.pi/agent`) - the direct analog of
-/// Claude's `~/.claude/CLAUDE.md`. See [`pi_context_target`] for the
-/// precedence we mirror when picking which file to write.
 pub fn pi_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(PathBuf::from(home).join(".pi").join("agent"))
 }
 
-/// pi's context-file precedence, mirroring
-/// `@earendil-works/pi-coding-agent`'s `dist/core/resource-loader.js`. pi reads
-/// the first match and ignores the rest, so csm must write into whichever file
-/// pi will actually load.
+/// Context filenames in pi resource-loader precedence order.
 const PI_CONTEXT_CANDIDATES: [&str; 4] = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
-/// Pick the file pi will actually load from `~/.pi/agent/`. First-match-wins
-/// over [`PI_CONTEXT_CANDIDATES`]; if none exists yet, default to `CLAUDE.md`
-/// (fresh-install behavior) - otherwise writing into `CLAUDE.md` when
-/// `AGENTS.md` exists would be silently ignored.
+/// Use the first file pi will load, defaulting to `CLAUDE.md` on a fresh install.
 pub fn pi_context_target() -> Result<PathBuf> {
     let dir = pi_dir()?;
     for name in PI_CONTEXT_CANDIDATES {
@@ -48,10 +35,6 @@ pub fn pi_context_target() -> Result<PathBuf> {
     Ok(dir.join("CLAUDE.md"))
 }
 
-/// Path to the global user codex config dir (`~/.codex`), honoring `$CODEX_HOME`
-/// (codex's own override, mirroring `$CSM_HOME` -> `~/.csm`). codex
-/// auto-discovers `AGENTS.md` and `hooks.json` here - the direct analogs of
-/// Claude's `~/.claude/CLAUDE.md` and `settings.json`.
 pub fn codex_dir() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("CODEX_HOME") {
         if !p.is_empty() {
@@ -62,10 +45,7 @@ pub fn codex_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".codex"))
 }
 
-/// codex's global instructions precedence: `AGENTS.override.md` (if present and
-/// non-empty) else `AGENTS.md` - codex loads only the first non-empty file at
-/// the global scope. Mirroring [`pi_context_target`], csm must write into
-/// whichever file codex will actually load, else its block is silently ignored.
+/// Codex loads a nonblank `AGENTS.override.md` before `AGENTS.md`.
 pub fn codex_agents_target() -> Result<PathBuf> {
     let dir = codex_dir()?;
     let override_md = dir.join("AGENTS.override.md");
@@ -76,20 +56,12 @@ pub fn codex_agents_target() -> Result<PathBuf> {
     Ok(dir.join("AGENTS.md"))
 }
 
-/// Path to the global user codex hooks file (`~/.codex/hooks.json`) - the
-/// analog of Claude's `~/.claude/settings.json` hooks. codex loads hooks from
-/// `hooks.json` or inline `[hooks]` in `config.toml`; csm uses the standalone
-/// `hooks.json` so it never touches the user's `config.toml` (model/provider
-/// settings live there).
+/// Use a standalone hook file to avoid editing the user's `config.toml`.
 pub fn codex_hooks_path() -> Result<PathBuf> {
     Ok(codex_dir()?.join("hooks.json"))
 }
 
-/// Path to the global user opencode config dir (`~/.config/opencode`),
-/// honoring `$XDG_CONFIG_HOME` - opencode resolves its config dir through XDG
-/// (`XDG_CONFIG_HOME=/x opencode debug paths` reports `/x/opencode`). Not to
-/// be confused with `$OPENCODE_CONFIG_DIR`: that adds an extra per-directory
-/// config source, it does not relocate this dir.
+/// Resolve the global config through XDG. `OPENCODE_CONFIG_DIR` adds a separate config source.
 pub fn opencode_dir() -> Result<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
         if !x.is_empty() {
@@ -100,17 +72,11 @@ pub fn opencode_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".config").join("opencode"))
 }
 
-/// opencode's global instructions file: `<config dir>/AGENTS.md` - the analog
-/// of codex's `~/.codex/AGENTS.md`. No precedence dance unlike pi/codex: a
-/// `CLAUDE.md` at the config dir is not loaded (verified - a marker there is
-/// unseen, the same content in `AGENTS.md` is), so `AGENTS.md` is simply the
-/// file.
 pub fn opencode_agents_target() -> Result<PathBuf> {
     Ok(opencode_dir()?.join("AGENTS.md"))
 }
 
-/// Inject (or refresh) the csm block into `path`. Creates the file and parent
-/// dirs if missing. Idempotent. Returns (path, modified).
+/// Inject or refresh the marked prompt block. Returns the path and whether it changed.
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
     let home = crate::store::csm_home()?.display().to_string();
     let block = csm_block(&home);
@@ -126,20 +92,12 @@ pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
     Ok((path.to_path_buf(), modified))
 }
 
-/// Find the csm block's marker bounds in `content`: the byte offsets of
-/// [`CSM_MARK_BEGIN`] and [`CSM_MARK_END`] when both are present and in order
-/// (begin before end). Single source of truth for "is the block present?" -
-/// shared by [`replace_or_prepend`] (the write path: rewrite vs prepend) and
-/// [`prompt_block_present`] (the read path `doctor` uses), so install and
-/// diagnose agree on what "present" means.
 fn block_bounds(content: &str) -> Option<(usize, usize)> {
     let begin = content.find(CSM_MARK_BEGIN)?;
     let end = content.find(CSM_MARK_END)?;
     (end >= begin).then_some((begin, end))
 }
 
-/// Read-only check: does `path` contain the csm prompt block? Used by `doctor`;
-/// mirrors the presence [`inject_file`] maintains (via [`block_bounds`]).
 pub fn prompt_block_present(path: &Path) -> bool {
     std::fs::read_to_string(path)
         .map(|s| block_bounds(&s).is_some())
@@ -165,9 +123,6 @@ fn replace_or_prepend(existing: &str, block: &str) -> String {
     }
 }
 
-/// Read a JSON file as a `serde_json::Value`, returning `{}` if the file is
-/// missing or empty. Shared by the agent hook installs (Claude `settings.json`,
-/// codex `hooks.json`) so both tolerate an absent/blank file identically.
 fn read_json_or_default(path: &Path) -> Result<serde_json::Value> {
     if !path.exists() {
         return Ok(serde_json::json!({}));
@@ -180,12 +135,6 @@ fn read_json_or_default(path: &Path) -> Result<serde_json::Value> {
     serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Ensure the `csm hook` SessionStart entry is present in the JSON file at
-/// `path` (Claude `settings.json` or codex `hooks.json` - same hooks shape, so
-/// [`ensure_sessionstart_hook`] works for both). Creates the file if missing;
-/// leaves all other entries untouched. Prints a `wrote`/`already present`
-/// status line. Returns whether the hook was newly written - codex uses this to
-/// decide whether to print its trust hint.
 fn ensure_sessionstart_hook_in_file(path: &Path) -> Result<bool> {
     let mut root = read_json_or_default(path)?;
     let written = ensure_sessionstart_hook(&mut root);
@@ -205,9 +154,6 @@ fn ensure_sessionstart_hook_in_file(path: &Path) -> Result<bool> {
     Ok(written)
 }
 
-/// Inject the csm working-mode prompt block into `path` and print an
-/// `injected`/`already present` status line. Thin status wrapper around
-/// [`inject_file`] shared by every agent install.
 fn inject_prompt_block(path: &Path) -> Result<()> {
     let (_, modified) = inject_file(path)?;
     if modified {
@@ -225,10 +171,6 @@ fn inject_prompt_block(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Install Claude Code's state-injection wiring: the `SessionStart` hook in
-/// `~/.claude/settings.json` and the csm working-mode block in
-/// `~/.claude/CLAUDE.md`. Idempotent - leaves all other settings/content
-/// untouched. This is `ClaudeAgent::install`.
 pub fn install_claude() -> Result<()> {
     let claude_dir = claude_dir()?;
     std::fs::create_dir_all(&claude_dir)?;
@@ -237,37 +179,18 @@ pub fn install_claude() -> Result<()> {
     Ok(())
 }
 
-/// Install pi's state-injection wiring: the csm working-mode block in pi's
-/// global context file (`~/.pi/agent/AGENTS.md` or `CLAUDE.md` - whichever pi
-/// loads first; see [`pi_context_target`]). pi discovers this file at launch
-/// (no hook needed), so the per-session state snapshot is all that's passed at
-/// launch time. Idempotent. This is `PiAgent::install`.
 pub fn install_pi() -> Result<()> {
     inject_prompt_block(&pi_context_target()?)?;
     Ok(())
 }
 
-/// Install codex's state-injection wiring: a `SessionStart` hook in
-/// `~/.codex/hooks.json` and the csm working-mode block in `~/.codex/AGENTS.md`
-/// (or `AGENTS.override.md` if codex loads that - see [`codex_agents_target`]).
-/// Idempotent - leaves all other hooks/content untouched. This is
-/// `CodexAgent::install`.
-///
-/// Unlike Claude, codex requires non-managed command hooks to be reviewed and
-/// trusted (against the hook's hash) via `/hooks` before they run; when the
-/// hook is newly written `csm init` prints a trust hint so a fresh install
-/// isn't silently inert. The `csm hook` handler is reused unchanged - codex's
-/// SessionStart accepts the same JSON Claude does.
 pub fn install_codex() -> Result<()> {
     let codex_dir = codex_dir()?;
     std::fs::create_dir_all(&codex_dir)?;
     let hook_written = ensure_sessionstart_hook_in_file(&codex_hooks_path()?)?;
     inject_prompt_block(&codex_agents_target()?)?;
 
-    // codex skips non-managed command hooks until they are reviewed/trusted
-    // via `/hooks`. Only hint when the hook was just written (re-runs don't
-    // re-trigger trust review); if an existing hook is untrusted, codex itself
-    // warns at startup.
+    // A newly written Codex hook requires trust through `/hooks`.
     if hook_written {
         ui::warn(
             "codex requires hooks to be trusted: in a codex session run `/hooks` \
@@ -278,21 +201,12 @@ pub fn install_codex() -> Result<()> {
     Ok(())
 }
 
-/// Install opencode's state-injection wiring: the csm working-mode block in
-/// `~/.config/opencode/AGENTS.md`. No hook file - opencode has no
-/// SessionStart-hook envelope csm can reuse, so the per-session snapshot is
-/// injected at launch instead (`OpenCodeAgent::launch` in `agent.rs` passes it
-/// via `$OPENCODE_CONFIG_CONTENT`). Idempotent. This is
-/// `OpenCodeAgent::install`.
 pub fn install_opencode() -> Result<()> {
     std::fs::create_dir_all(opencode_dir()?)?;
     inject_prompt_block(&opencode_agents_target()?)?;
     Ok(())
 }
 
-/// Read-only check: is the `csm hook` SessionStart entry already wired into
-/// `root`? Shared by [`ensure_sessionstart_hook`] (install) and `doctor`
-/// (diagnose), so install and diagnose agree on what "present" means.
 pub fn sessionstart_hook_present(root: &serde_json::Value) -> bool {
     const CMD: &str = "csm hook";
     root.get("hooks")
@@ -311,8 +225,6 @@ pub fn sessionstart_hook_present(root: &serde_json::Value) -> bool {
         })
 }
 
-/// Add a SessionStart hook (`csm hook`) to the settings if not already present.
-/// Returns true if the settings were modified.
 fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
     const CMD: &str = "csm hook";
     if sessionstart_hook_present(root) {
@@ -335,11 +247,7 @@ fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
     true
 }
 
-/// Read-only check: is the `csm` binary resolvable as a bare command on PATH
-/// (so the hook's `csm hook` will resolve)? Shared by `csm init` (install-time
-/// warning) and `doctor` (diagnose), like the other wiring presence checks.
-/// Uses `which csm` rather than `current_exe()`: the hook invokes csm by bare
-/// name, so only a PATH lookup reflects what the hook will actually see.
+/// Resolve the bare executable name used by the installed hook.
 pub fn which_csm() -> Option<PathBuf> {
     Command::new("which")
         .arg("csm")
@@ -368,7 +276,6 @@ mod tests {
 
         #[test]
         fn end_before_begin_is_none() {
-            // Both markers present but reversed: must not match.
             let content = format!("{CSM_MARK_END} {CSM_MARK_BEGIN}");
             assert!(block_bounds(&content).is_none());
         }
@@ -412,8 +319,6 @@ mod tests {
         #[test]
         fn replacing_current_block_is_idempotent() {
             let block = csm_block("/h");
-            // A file already holding this exact block is unchanged by another
-            // replace_or_prepend pass.
             assert_eq!(replace_or_prepend(&block, &block), block);
         }
     }
@@ -495,7 +400,6 @@ mod tests {
 
         #[test]
         fn ensure_adds_into_existing_hooks_object() {
-            // hooks present but no SessionStart array -> added, other hooks kept.
             let mut root = serde_json::json!({ "hooks": { "Stop": [] } });
             assert!(ensure_sessionstart_hook(&mut root));
             assert!(sessionstart_hook_present(&root));
@@ -510,8 +414,6 @@ mod tests {
         use std::fs;
         use tempfile::TempDir;
 
-        /// Fresh temp `CLAUDE.md` target. The returned `TempDir` must stay
-        /// bound for the test's scope - it owns the dir and cleans it on drop.
         fn temp_target() -> (TempDir, PathBuf) {
             let dir = TempDir::new().unwrap();
             let target = dir.path().join("CLAUDE.md");
@@ -528,7 +430,6 @@ mod tests {
                 let content = fs::read_to_string(&target).unwrap();
                 assert!(content.contains(CSM_MARK_BEGIN));
                 assert!(content.contains(CSM_MARK_END));
-                // The block reflects the isolated $CSM_HOME (path dynamization).
                 assert!(content.contains(&home.display().to_string()));
             });
         }
@@ -609,7 +510,6 @@ mod tests {
                 let s_before =
                     fs::read_to_string(home.join(".claude").join("settings.json")).unwrap();
                 let m_before = fs::read_to_string(home.join(".claude").join("CLAUDE.md")).unwrap();
-                // Second run must not duplicate the hook or the block.
                 install_claude().unwrap();
                 let s_after =
                     fs::read_to_string(home.join(".claude").join("settings.json")).unwrap();
@@ -655,18 +555,13 @@ mod tests {
             with_home(|home| {
                 let dir = home.join(".pi").join("agent");
                 fs::create_dir_all(&dir).unwrap();
-                // AGENTS.md (candidate 0) beats CLAUDE.md (candidate 2).
                 fs::write(dir.join("CLAUDE.md"), "x").unwrap();
                 fs::write(dir.join("AGENTS.md"), "x").unwrap();
                 assert_eq!(pi_context_target().unwrap(), dir.join("AGENTS.md"));
             });
         }
 
-        // The uppercase case-variant candidates (AGENTS.MD, CLAUDE.MD) exist for
-        // pi compatibility but aren't portably testable: on a case-insensitive
-        // FS (macOS default) CLAUDE.MD and CLAUDE.md are the same file, so
-        // candidate 2 always shadows candidate 3. Different-basename precedence
-        // (AGENTS.* > CLAUDE.*) is covered above and is FS-independent.
+        // Case-only precedence cannot be tested on case-insensitive filesystems.
     }
 
     mod opencode_dir {
@@ -684,7 +579,6 @@ mod tests {
                         PathBuf::from("/custom/xdg").join("opencode")
                     );
                 });
-                // An empty override falls back to ~/.config (like $CODEX_HOME).
                 with_env("XDG_CONFIG_HOME", "", || {
                     assert_eq!(
                         opencode_dir().unwrap(),
@@ -755,7 +649,6 @@ mod tests {
             with_home(|home| {
                 let dir = home.join(".codex");
                 fs::create_dir_all(&dir).unwrap();
-                // An empty override is skipped by Codex, so csm targets AGENTS.md.
                 fs::write(dir.join("AGENTS.override.md"), "   \n  ").unwrap();
                 assert_eq!(codex_agents_target().unwrap(), dir.join("AGENTS.md"));
             });
@@ -792,7 +685,6 @@ mod tests {
                 install_codex().unwrap();
                 let h_before = fs::read_to_string(home.join(".codex").join("hooks.json")).unwrap();
                 let m_before = fs::read_to_string(home.join(".codex").join("AGENTS.md")).unwrap();
-                // Second run must not duplicate the hook or the block.
                 install_codex().unwrap();
                 let h_after = fs::read_to_string(home.join(".codex").join("hooks.json")).unwrap();
                 let m_after = fs::read_to_string(home.join(".codex").join("AGENTS.md")).unwrap();
@@ -832,7 +724,6 @@ mod tests {
                 let before =
                     fs::read_to_string(home.join(".config").join("opencode").join("AGENTS.md"))
                         .unwrap();
-                // Second run must not duplicate the block.
                 install_opencode().unwrap();
                 let after =
                     fs::read_to_string(home.join(".config").join("opencode").join("AGENTS.md"))
