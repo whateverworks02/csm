@@ -72,7 +72,7 @@ cso() { csm "$@" -a opencode; }
 | `csm sprint add [name]` | Add an active session to the sprint, or omit the name to pick from eligible sessions |
 | `csm sprint remove <name>` | Remove a session from the sprint |
 | `csm show [name]` | Compact card: origin, context, task board, what's claimable |
-| `csm init` | (Re)install the SessionStart hooks, the prompt, and the skills |
+| `csm init` | (Re)install the SessionStart hooks and the working-mode prompt |
 | `csm pin <name>` / `csm unpin <name>` | Protect from / allow garbage collection |
 | `csm archive <name>` / `csm unarchive <name>` | Retain a session off the daily surfaces / return it to them |
 | `csm rename <old> <new>` | Rename and re-home to the current directory |
@@ -163,18 +163,18 @@ A plan request ends once the plan is recorded, execution ends at `Pending review
 
 Marks: `○` open, `◐` pending review, `◑` pending fix, `✓` done, `◆` the task has a view, `(unverified)` a `[condition]` whose evidence isn't recorded, `(missing)` an unresolvable ref. `claimable` lists what can be started now; `Done` caps its list and folds the rest into `… +K more`.
 
-## Skills
-
-`csm init` also installs two skills, at the handoffs where authoring discipline matters most:
-
-- **`/csm-plan`** - for a new mission or a replan: resolve the decisions that shape the plan, update `state.md`, and decompose into tasks with verifiable outcomes and `needs:` tails.
-- **`/csm-scout`** - for one open question whose answer needs the code: read the files that can supply the evidence, and record the findings with `path:line` citations in the relevant note.
-
-Claude and opencode load them from `~/.claude/skills/`; vendor-neutral copies live at `~/.csm/skills/plan.md` and `scout.md`.
-
 ## Upgrading
 
-The board no longer authorizes execution (see [The task lifecycle](#the-task-lifecycle)). Run `csm init` to replace the shared prompt, and update any personal instructions that assumed execution followed the board. Existing task files need no migration.
+Run `csm init` to refresh the prompt and hooks. Update any personal instructions that treated board status as execution authorization. See [The task lifecycle](#the-task-lifecycle).
+
+To remove the retired skills, run the commands below. If you moved your csm home, use the old path for `csm_legacy_home`.
+
+```sh
+csm_legacy_home=${CSM_HOME:-"$HOME/.csm"}
+rm -f "$HOME/.claude/skills/csm-plan/SKILL.md" \
+      "$HOME/.claude/skills/csm-scout/SKILL.md"
+rm -f "$csm_legacy_home/skills/plan.md" "$csm_legacy_home/skills/scout.md"
+```
 
 ## License
 

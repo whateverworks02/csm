@@ -8,7 +8,6 @@ pub mod inject;
 pub mod markdown;
 pub mod needs;
 pub mod prompt;
-pub mod skills;
 pub mod store;
 pub mod ui;
 pub mod workspace;
