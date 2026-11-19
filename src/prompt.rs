@@ -25,11 +25,11 @@ A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and
 3. **Phase.** Use the table to identify the authorized action. Plan, execute, review, and open a PR as separate phases, even if one agent serves all of them. Investigate, implement, test, fix defects, and correct facts as needed within the authorized scope and phase without per-step approval. Propose work beyond that boundary for a user decision.
 4. **Prerequisites.** Check only evidence the next decision needs, including `needs:` before claiming. Skip a task with unmet or unverified dependencies only to select another authorized candidate. If none qualifies, report the wait. If a condition in the user's instruction fails, report it and stop that instruction. Do not repair the failure merely to activate it. Interruption alone triggers no check.
 
-   Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings.
+   Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise. Changes or age are cues to check, not proof of failure. If the premise holds, reuse the conclusion. If the premise changed, update the original record with the new evidence even when the conclusion still holds. Amend or explicitly supersede any affected conclusion and preserve unaffected findings.
 
    For an unknown, record the missing evidence in the consuming task's Open questions, pause dependent work, and continue independent authorized work. Report what is confirmed, what remains unknown or undone, and the next action when evidence limits progress. Report any conflict with a user requirement and retain the requirement until the user changes it.
 5. **Ownership.** Update only the relevant entries and distinguish proposals from user decisions. Coordinators maintain state.md, notes, scripts, and the board, create Scope, AC, and SOP, maintain dependencies, and write Review while normalizing Progress. Workers maintain their task file and board line, follow its SOP, and raise Open questions when stuck. Workers self-claim without assignment or tracking. Claims leave no board mark. Ask before claiming if there is real ownership ambiguity and leave others' work in place.
-6. **Endpoint.** Write the current result, verification, remaining work, and endpoint reached, then stop at the table's endpoint or an earlier user limit. Before entering another phase, obtain its authorization. Preserve the scope and phase of interrupted work in Progress, or in Context under the pre-task exception below. Factual corrections alone do not change board status.
+6. **Endpoint.** Write the current result, verification, remaining work, and endpoint reached, then stop at the table's endpoint or an earlier user limit. At handoff, wait for user input before entering the next phase. Preserve the scope and phase of interrupted work in Progress, or in Context under the pre-task exception below. Factual corrections alone do not change board status.
 
 ### Requests and actions
 
@@ -198,7 +198,7 @@ mod tests {
         assert!(block.contains(
             "Write the current result, verification, remaining work, and endpoint reached, then stop at the table's endpoint or an earlier user limit."
         ));
-        assert!(block.contains("Before entering another phase, obtain its authorization."));
+        assert!(block.contains("At handoff, wait for user input before entering the next phase."));
         assert!(block.contains(
             "Preserve the scope and phase of interrupted work in Progress, or in Context under the pre-task exception below."
         ));
@@ -352,7 +352,7 @@ mod tests {
         assert!(block.contains("Resume the recorded plan within the mandate. Before using a recorded conclusion, verify the relevant premise."));
         assert!(block.contains("Changes or age are cues to check, not proof of failure."));
         assert!(block.contains(
-            "Reuse supported conclusions. Amend or explicitly supersede disproven conclusions in their original record, retaining the evidence and unaffected findings."
+            "If the premise holds, reuse the conclusion. If the premise changed, update the original record with the new evidence even when the conclusion still holds. Amend or explicitly supersede any affected conclusion and preserve unaffected findings."
         ));
         assert!(block.contains(
             "For an unknown, record the missing evidence in the consuming task's Open questions, pause dependent work, and continue independent authorized work."
