@@ -21,7 +21,6 @@
 
 use crate::hook;
 use crate::inject;
-use crate::skills;
 use crate::store;
 use crate::ui;
 use anyhow::Result;
@@ -65,14 +64,11 @@ pub fn agent_for(id: &str) -> Result<Box<dyn Agent>> {
 }
 
 /// Install global wiring for every known agent. Idempotent. Used by `csm init`
-/// so one command sets up every supported agent. Also deploys the
-/// vendor-neutral skill homes (`skills::install_vendor_neutral`) - the
-/// human-readable copies, agent-independent so they deploy once.
+/// so one command sets up every supported agent.
 pub fn install_all() -> Result<()> {
     for id in KNOWN_AGENTS {
         agent_for(id)?.install()?;
     }
-    skills::install_vendor_neutral()?;
     Ok(())
 }
 
@@ -96,10 +92,7 @@ impl Agent for ClaudeAgent {
     }
 
     fn install(&self) -> Result<()> {
-        inject::install_claude()?;
-        // Claude reaches the csm skills as real skills (slash command +
-        // auto-trigger) - no pointer line in its block.
-        skills::install_claude()
+        inject::install_claude()
     }
 }
 
