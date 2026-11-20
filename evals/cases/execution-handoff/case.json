@@ -1,0 +1,100 @@
+{
+  "provenance": {
+    "source": "de32e424497559102256644bb7e265770e5e30bd:evals/scenarios/execute-stops-at-review-seed/scenario.json",
+    "reconstruction": "Both user turns and the project are from the source. Added a Review placeholder to the initial task so an early verdict has concrete evidence."
+  },
+  "repo": {
+    "README.md": "# greeting-demo\n\nA tiny greeting utility maintained under a workspace-memory working protocol.\n",
+    "greet.py": "\"\"\"Tiny greeting utility.\"\"\"\n\n\ndef greet() -> str:\n    \"\"\"Return the greeting.\"\"\"\n    raise NotImplementedError\n\n\nif __name__ == \"__main__\":\n    print(greet())\n"
+  },
+  "session": {
+    "state.md": "# eval-fixture - state\n\n## Context\nWorkspace memory demo project: a tiny greeting utility maintained under the csm working protocol. Current focus: the board has one Open task awaiting execution.\n\n## Key links\n- Repo: the fixture repo this session is bound to (the agent's working directory).\n",
+    "tasks/INDEX.md": "# eval-fixture - tasks board\n\n> Each task: tasks/<id>-<slug>.md. Status = section.\n\n## Open\n- 001 add-greeting\n\n## Pending review\n\n## Pending fix\n\n## Done\n",
+    "tasks/001-add-greeting.md": "# 001 add-greeting\n\n## Scope\n\nImplement `greet()` in `greet.py` so the module runs as a script and prints `hello, world`.\n\n## AC\n\n- `python3 greet.py` prints exactly `hello, world`.\n\n## SOP\n\n1. Implement `greet()`; keep the module runnable under `if __name__ == \"__main__\"`.\n2. Run `python3 greet.py` and verify the output.\n3. Commit the change.\n\n## Progress\n\nImplementation has not started.\n\n## Review\n\nAwaiting execution.\n"
+  },
+  "turns": [
+    "execute the next task",
+    "how did it go? answer in one sentence, change nothing."
+  ],
+  "checks": [
+    {
+      "kind": "command_output",
+      "argv": [
+        "python3",
+        "-IB",
+        "greet.py"
+      ],
+      "stdout": "hello, world\n"
+    },
+    {
+      "kind": "command_output",
+      "argv": [
+        "python3",
+        "-IB",
+        "-c",
+        "import runpy; assert runpy.run_path(\"greet.py\")[\"greet\"]() == \"hello, world\""
+      ],
+      "stdout": ""
+    },
+    {
+      "kind": "command_output",
+      "argv": [
+        "git",
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "HEAD",
+        "--",
+        "greet.py"
+      ],
+      "stdout": "greet.py\n"
+    },
+    {
+      "kind": "command_output",
+      "argv": [
+        "python3",
+        "-IB",
+        "-c",
+        "from pathlib import Path; from subprocess import check_output; assert Path('greet.py').read_bytes() == check_output(['git', 'cat-file', 'blob', 'HEAD:greet.py']), 'working greet.py differs from HEAD:greet.py'"
+      ],
+      "stdout": ""
+    },
+    {
+      "kind": "board_move",
+      "entry": "001 add-greeting",
+      "from": "Open",
+      "to": "Pending review"
+    },
+    {
+      "kind": "section_updated",
+      "path": "tasks/001-add-greeting.md",
+      "section": "Progress",
+      "contains": [
+        "greet.py"
+      ]
+    },
+    {
+      "kind": "section_unchanged",
+      "path": "tasks/001-add-greeting.md",
+      "section": "Review"
+    },
+    {
+      "kind": "repo_unchanged",
+      "turn": 2,
+      "baseline": "previous"
+    },
+    {
+      "kind": "session_unchanged",
+      "turn": 2,
+      "baseline": "previous"
+    },
+    {
+      "kind": "human_reply"
+    },
+    {
+      "kind": "human_reply",
+      "turn": 2
+    }
+  ]
+}

@@ -9,6 +9,8 @@ pub fn csm_block(csm_home: &str) -> String {
 
 A csm session is active iff `$CSM_SESSION` is set. Read `state.md` (Context) and `tasks/INDEX.md`, and skim `notes/INDEX.md` at `{csm_home}/sessions/$CSM_SESSION/`. A `[csm]` block, if present, is only a snapshot of these files. If `$CSM_SESSION` is unset, there is no csm session. **You maintain these files, not csm.**
 
+Search, read, and update CSM records within the active session by default. If it has no matching task, continue within the requested phase using relevant project files. Read another session only as needed for an explicit user request for cross-session work or a specific cross-session reference in the active records. Updating another session requires explicit user direction.
+
 ### Turn decisions
 
 Before acting, identify the work concerned, the action the user requested, and its endpoint.
