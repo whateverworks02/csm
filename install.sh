@@ -31,7 +31,9 @@ curl -fsSL "${BASE}/${TARBALL}"        -o "${TMP}/${TARBALL}"
 curl -fsSL "${BASE}/${TARBALL}.sha256" -o "${TMP}/${TARBALL}.sha256"
 
 echo "==> verifying checksum..."
-( cd "$TMP" && shasum -a 256 -c "${TARBALL}.sha256" >/dev/null 2>&1 ) \
+actual_checksum="$(cd "$TMP" && shasum -a 256 "$TARBALL")"
+expected_checksum="$(cat "${TMP}/${TARBALL}.sha256")"
+[ "$actual_checksum" = "$expected_checksum" ] \
   || { echo "error: checksum mismatch - download may be corrupted or tampered" >&2; exit 1; }
 
 echo "==> installing to ${INSTALL_DIR}/csm..."

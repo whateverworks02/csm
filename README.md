@@ -19,7 +19,7 @@ your `PATH` if prompted.
 You can also build from a local clone with Cargo.
 
 ```sh
-cargo install --path . --locked
+cargo install --path . --locked --bin csm
 csm init
 ```
 
@@ -37,6 +37,8 @@ csm                          # Pick a session, including from another repo
 Use `-a` to select `claude` (the default), `codex`, `pi`, or `opencode`.
 In Codex, run `/hooks` and trust the `csm hook` entry to load session context.
 Run `csm --help` for all commands.
+
+Use a single directory name for each session, such as `search` or `api-review`.
 
 ## What carries over
 

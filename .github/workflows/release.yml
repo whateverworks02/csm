@@ -33,10 +33,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build (release, locked)
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin csm --target ${{ matrix.target }}
       - name: Package tarball + checksum
         env:
           TARGET: ${{ matrix.target }}
+          # Omit macOS AppleDouble entries for binaries with extended attributes.
+          COPYFILE_DISABLE: "1"
         run: |
           # `-C .../release csm` puts the binary at the archive root.
           tar czf "csm-${TARGET}.tar.gz" -C "target/${TARGET}/release" csm
@@ -52,7 +54,7 @@ jobs:
     name: publish release
     needs: build
     # Only publish on a real tag push. Manual workflow_dispatch runs build only.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write # create release + upload assets
       actions: read # download-artifact from the build job

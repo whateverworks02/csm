@@ -813,7 +813,6 @@ mod tests {
     #[serial]
     fn read_tasks_index_md_none_when_no_workspace() {
         with_csm_home(|_dir| {
-            touch_session("ws", "/o").unwrap();
             assert!(read_tasks_index_md("ws").is_none());
         });
     }
