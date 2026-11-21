@@ -138,6 +138,7 @@ mod tests {
     fn build_context_falls_back_when_files_missing() {
         with_csm_home(|_dir| {
             store::touch_session("ws", "/o").unwrap();
+            std::fs::remove_dir_all(store::session_dir("ws").unwrap()).unwrap();
             let ctx = build_context("ws");
             assert!(ctx.contains("(state.md not found)"));
             assert!(ctx.contains("(tasks/INDEX.md not found)"));

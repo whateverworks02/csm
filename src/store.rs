@@ -4,9 +4,11 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Write};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -57,7 +59,19 @@ pub fn index_path() -> Result<PathBuf> {
 }
 
 pub fn session_dir(name: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !name.contains('\0') && Path::new(name).file_name() == Some(OsStr::new(name)),
+        "invalid session name {name:?}. Use a single directory name"
+    );
     Ok(sessions_dir()?.join(name))
+}
+
+fn require_unoccupied_workspace(dir: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => anyhow::bail!("workspace dir already exists: {}", dir.display()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspecting {}", dir.display())),
+    }
 }
 
 pub fn now_iso() -> String {
@@ -129,6 +143,15 @@ pub fn touch_session(name: &str, origin_pwd: &str) -> Result<SessionMeta> {
 
 pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMeta, bool)> {
     let (_lock, mut idx) = load_index_for_update()?;
+    let dir = session_dir(name)?;
+    let new_workspace = !idx.sessions.contains_key(name);
+    if new_workspace {
+        // Reserve the name on disk while holding the index lock. The filesystem
+        // detects aliases such as case variants on case-insensitive volumes.
+        std::fs::create_dir_all(sessions_dir()?)?;
+        std::fs::create_dir(&dir)
+            .with_context(|| format!("creating workspace {}", dir.display()))?;
+    }
     let meta = idx
         .sessions
         .entry(name.to_string())
@@ -144,7 +167,19 @@ pub fn touch_session_reviving(name: &str, origin_pwd: &str) -> Result<(SessionMe
     let revived = meta.archived_at.take().is_some();
     meta.last_access = now_iso();
     let clone = meta.clone();
-    save_index(&idx)?;
+
+    let result = crate::workspace::ensure_workspace(name, &clone).and_then(|()| save_index(&idx));
+    if let Err(error) = result {
+        if new_workspace {
+            if let Err(cleanup) = std::fs::remove_dir_all(&dir) {
+                return Err(error.context(format!(
+                    "could not clean up new workspace {}: {cleanup}",
+                    dir.display()
+                )));
+            }
+        }
+        return Err(error);
+    }
     Ok((clone, revived))
 }
 
@@ -231,6 +266,7 @@ pub fn set_in_sprint(name: &str, in_sprint: bool) -> Result<()> {
 /// Rename and re-home a session. Equal names only update its origin and access time.
 pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
+    let old_dir = session_dir(old)?;
 
     if old == new {
         let meta = idx
@@ -243,6 +279,7 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
         return Ok(());
     }
 
+    let new_dir = session_dir(new)?;
     if idx.sessions.contains_key(new) {
         anyhow::bail!("a session named {:?} already exists", new);
     }
@@ -253,12 +290,12 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
         .clone();
 
     // Move the workspace before updating the index so a failed move leaves it intact.
-    let old_dir = session_dir(old)?;
-    let new_dir = session_dir(new)?;
-    if new_dir.exists() {
-        anyhow::bail!("workspace dir already exists: {}", new_dir.display());
-    }
+    require_unoccupied_workspace(&new_dir)?;
     if old_dir.exists() {
+        anyhow::ensure!(
+            !workspace_is_shared(&old_dir, old, &idx)?,
+            "cannot rename session {old:?}: its workspace is shared with another session"
+        );
         std::fs::rename(&old_dir, &new_dir)
             .with_context(|| format!("renaming {} -> {}", old_dir.display(), new_dir.display()))?;
     }
@@ -277,13 +314,40 @@ pub fn delete_session(name: &str) -> Result<()> {
     if !idx.sessions.contains_key(name) {
         anyhow::bail!("no csm session named {:?}", name);
     }
-    idx.sessions.remove(name);
-    save_index(&idx)?;
     let dir = session_dir(name)?;
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+    if !workspace_is_shared(&dir, name, &idx)? {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("removing {}", dir.display())),
+        }
     }
-    Ok(())
+    idx.sessions.remove(name);
+    save_index(&idx)
+}
+
+fn workspace_is_shared(dir: &Path, name: &str, idx: &Index) -> Result<bool> {
+    let workspace = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", dir.display())),
+    };
+    for other in idx.sessions.keys().filter(|other| other.as_str() != name) {
+        let other_dir = session_dir(other)?;
+        match std::fs::symlink_metadata(&other_dir) {
+            Ok(metadata)
+                if (workspace.dev(), workspace.ino()) == (metadata.dev(), metadata.ino()) =>
+            {
+                return Ok(true);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspecting {}", other_dir.display()));
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -330,6 +394,55 @@ mod tests {
             assert!(require_session("smoke").is_ok());
             delete_session("smoke").unwrap();
             assert!(require_session("smoke").is_err());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn session_paths_reject_directory_aliases_before_indexing() {
+        with_csm_home(|_dir| {
+            for name in ["", ".", "..", "normal/", "nested/name", "/absolute"] {
+                assert!(session_dir(name).is_err(), "{name:?}");
+                assert!(touch_session(name, "/o").is_err(), "{name:?}");
+            }
+            assert!(load_index().unwrap().sessions.is_empty());
+            assert!(touch_session("réview.v1", "/o").is_ok());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn failed_workspace_creation_does_not_index_the_session() {
+        with_csm_home(|_dir| {
+            let root = sessions_dir().unwrap();
+            std::fs::write(&root, "blocks workspace creation").unwrap();
+            assert!(touch_session_reviving("Review", "/o").is_err());
+            assert!(load_index().unwrap().sessions.is_empty());
+
+            std::fs::remove_file(root).unwrap();
+            touch_session_reviving("review", "/o").unwrap();
+            assert!(session_dir("review").unwrap().join("state.md").is_file());
+
+            if session_dir("Review").unwrap().exists() {
+                assert!(touch_session_reviving("Review", "/o").is_err());
+                let index = load_index().unwrap();
+                assert_eq!(index.sessions.len(), 1);
+                assert!(index.sessions.contains_key("review"));
+            }
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn failed_directory_deletion_keeps_the_index_entry() {
+        with_csm_home(|_dir| {
+            touch_session("session", "/o").unwrap();
+            let path = session_dir("session").unwrap();
+            std::fs::remove_dir_all(&path).unwrap();
+            std::fs::write(&path, "not a directory").unwrap();
+            assert!(delete_session("session").is_err());
+            assert!(require_session("session").is_ok());
+            assert!(path.is_file());
         });
     }
 
@@ -495,24 +608,27 @@ mod tests {
         with_csm_home(|_dir| {
             let chosen = touch_session("a", "/origin").unwrap();
             set_archived("a", true).unwrap();
+            let workspace = session_dir("a").unwrap();
+            std::fs::remove_dir_all(&workspace).unwrap();
             let start = || -> Result<()> { panic!("a stale session must not launch") };
             assert!(start_picked_session("a", &chosen.created_at, Some("/other"), start).is_err());
             let archived = require_session("a").unwrap();
             assert!(archived.is_archived());
             assert!(archived.registered_dirs.is_empty());
             assert_eq!(archived.last_access, chosen.last_access);
-            assert!(!session_dir("a").unwrap().exists());
+            assert!(!workspace.exists());
 
             set_archived("a", false).unwrap();
             rename_session("a", "b", "/origin").unwrap();
             assert!(start_picked_session("a", &chosen.created_at, None, start).is_err());
             assert!(require_session("a").is_err());
-            assert!(!session_dir("a").unwrap().exists());
+            assert!(!workspace.exists());
 
             let replacement = touch_session("a", "/different").unwrap();
             assert_ne!(replacement.created_at, chosen.created_at);
+            std::fs::remove_dir_all(&workspace).unwrap();
             assert!(start_picked_session("a", &chosen.created_at, None, start).is_err());
-            assert!(!session_dir("a").unwrap().exists());
+            assert!(!workspace.exists());
         });
     }
 

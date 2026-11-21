@@ -3,9 +3,11 @@
 use crate::store::{self, SessionMeta};
 use crate::ui;
 use crate::workspace;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Local;
 use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::path::Path;
 
 struct Candidate<'a> {
     name: &'a str,
@@ -17,23 +19,26 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let idx = store::load_index()?;
     let now = Local::now();
 
-    let mut candidates: Vec<Candidate> = idx
+    let mut candidates = idx
         .sessions
         .iter()
         .filter(|(_, m)| !m.pinned && !m.is_archived())
         .filter(|(_, m)| {
             older_than.is_none_or(|d| {
-                store::parse_time(&m.last_access)
-                    .map(|t| (now - t).num_days() >= d as i64)
-                    .unwrap_or(false)
+                store::parse_time(&m.last_access).is_ok_and(|t| {
+                    t <= now && u64::try_from((now - t).num_days()).is_ok_and(|age| age >= d)
+                })
             })
         })
-        .map(|(k, v)| Candidate {
-            name: k,
-            meta: v,
-            unfinished: unfinished_tasks(k),
+        .map(|(name, meta)| {
+            let dir = store::session_dir(name)?;
+            Ok(Candidate {
+                name,
+                meta,
+                unfinished: unfinished_tasks(&dir)?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     candidates.sort_by(|a, b| b.meta.last_access.cmp(&a.meta.last_access));
 
     if candidates.is_empty() {
@@ -116,11 +121,10 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
         }
         if !yes {
             eprintln!("{}", ui::epaint(ui::BOLD, "will delete:"));
-            let mut targets = HashSet::new();
-            for n in selected.iter().filter(|name| targets.insert(*name)) {
+            for n in &selected {
                 eprintln!("  {}", ui::epaint(ui::CYAN_BOLD, n));
             }
-            if !confirm_deletion(targets.len(), "selected")? {
+            if !confirm_deletion(selected.len(), "selected")? {
                 eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
                 return Ok(());
             }
@@ -128,12 +132,21 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
         selected
     };
 
+    let mut failed = 0;
     for name in &to_delete {
         match store::delete_session(name) {
             Ok(_) => ui::done("deleted", name),
-            Err(e) => eprintln!("{} {name}: {e}", ui::epaint(ui::RED_BOLD, "error:")),
+            Err(e) => {
+                failed += 1;
+                eprintln!("{} {name}: {e:#}", ui::epaint(ui::RED_BOLD, "error:"));
+            }
         }
     }
+    anyhow::ensure!(
+        failed == 0,
+        "could not delete {failed} of {} sessions",
+        to_delete.len()
+    );
     Ok(())
 }
 
@@ -142,10 +155,13 @@ fn confirm_deletion(count: usize, source: &str) -> Result<bool> {
     ui::confirm(&format!("Permanently delete {count} {source} {noun}?"))
 }
 
-fn unfinished_tasks(name: &str) -> usize {
-    workspace::read_tasks_board(name)
-        .map(|b| b.unfinished_count())
-        .unwrap_or(0)
+fn unfinished_tasks(dir: &Path) -> Result<usize> {
+    let path = dir.join("tasks/INDEX.md");
+    match std::fs::read_to_string(&path) {
+        Ok(board) => Ok(workspace::parse_tasks_board(&board).unfinished_count()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).with_context(|| format!("reading task board {}", path.display())),
+    }
 }
 
 fn names(rows: &[Candidate]) -> Vec<String> {
@@ -157,9 +173,11 @@ fn select_from_line(line: &str, rows: &[String]) -> Vec<String> {
     if line.eq_ignore_ascii_case("a") {
         return rows.to_vec();
     }
+    let mut seen = HashSet::new();
     line.split(',')
         .filter_map(|part| part.trim().parse::<usize>().ok())
         .filter_map(|index| index.checked_sub(1).and_then(|index| rows.get(index)))
+        .filter(|name| seen.insert(*name))
         .cloned()
         .collect()
 }
@@ -280,6 +298,33 @@ mod tests {
 
     #[test]
     #[serial]
+    fn large_cutoffs_and_future_timestamps_do_not_select_recent_sessions() {
+        with_csm_home(|_dir| {
+            scaffold_session("recent");
+            run(Some(u64::MAX), true).unwrap();
+            assert!(dir_exists("recent"));
+
+            let future = (Local::now() + chrono::Duration::hours(1)).to_rfc3339();
+            store::set_last_access("recent", future).unwrap();
+            run(Some(0), true).unwrap();
+            assert!(dir_exists("recent"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn unreadable_board_prevents_collection() {
+        with_csm_home(|_dir| {
+            scaffold_session("busy");
+            let board = store::session_dir("busy").unwrap().join("tasks/INDEX.md");
+            std::fs::write(&board, b"## Open\n- 001 task\n\xff").unwrap();
+            assert!(run(Some(0), true).is_err());
+            assert!(board.exists());
+        });
+    }
+
+    #[test]
+    #[serial]
     fn no_unpinned_candidates_is_noop() {
         with_csm_home(|_dir| {
             scaffold_session("kept");
@@ -348,6 +393,7 @@ mod tests {
     fn boardless_session_is_collected() {
         with_csm_home(|_dir| {
             store::touch_session("ghost", "/o").unwrap();
+            std::fs::remove_dir_all(store::session_dir("ghost").unwrap()).unwrap();
             backdate("ghost", 10);
             run(Some(5), true).unwrap();
             assert!(store::require_session("ghost").is_err());
@@ -360,6 +406,7 @@ mod tests {
         assert_eq!(select_from_line("a", &rows), vec!["a", "b"]);
         assert_eq!(select_from_line("A", &rows), vec!["a", "b"]);
         assert_eq!(select_from_line("2, 1", &rows), vec!["b", "a"]);
+        assert_eq!(select_from_line("2, 1, 2", &rows), vec!["b", "a"]);
         assert!(select_from_line("3", &rows).is_empty(), "out of range");
         assert!(select_from_line("x", &rows).is_empty(), "not a selection");
         assert!(select_from_line("a", &[]).is_empty());

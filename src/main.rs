@@ -96,8 +96,6 @@ enum Cmd {
     /// each selected session's workspace directory and index entry.
     Gc {
         /// Select all eligible sessions last accessed at least N days ago.
-        /// Use 0 through 9223372036854775807 days. Larger values can select
-        /// recently accessed sessions.
         #[arg(long, value_name = "N")]
         older_than: Option<u64>,
         /// Skip confirmation. Without --older-than, you still select the sessions.
@@ -218,11 +216,10 @@ fn cmd_start(name: &str, agent: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let origin_pwd = cwd.display().to_string();
 
-    let (meta, revived) = store::touch_session_reviving(name, &origin_pwd)?;
+    let (_, revived) = store::touch_session_reviving(name, &origin_pwd)?;
     if revived {
         ui::done("unarchived", name);
     }
-    workspace::ensure_workspace(name, &meta)?;
 
     wait_for_agent(spawn_agent(name, agent_adapter.as_ref())?)
 }
@@ -841,7 +838,7 @@ fn cmd_init() -> Result<()> {
         Some(p) => ui::step("found", &format!("csm on PATH at {}", ui::abbrev_path(&p))),
         None => ui::warn(
             "`csm` not on PATH; the hook command `csm hook` will fail. \
-             install with `cargo install --path .` (ensure ~/.cargo/bin is on PATH).",
+             install with `cargo install --path . --locked --bin csm` (ensure ~/.cargo/bin is on PATH).",
         ),
     }
     Ok(())

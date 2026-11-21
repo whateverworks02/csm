@@ -3,6 +3,7 @@
 use crate::prompt::{csm_block, CSM_MARK_BEGIN, CSM_MARK_END};
 use crate::ui;
 use anyhow::{Context, Result};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -80,7 +81,11 @@ pub fn opencode_agents_target() -> Result<PathBuf> {
 pub fn inject_file(path: &Path) -> Result<(PathBuf, bool)> {
     let home = crate::store::csm_home()?.display().to_string();
     let block = csm_block(&home);
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
     let new_content = replace_or_prepend(&existing, &block);
     let modified = new_content != existing;
     if modified {
@@ -137,7 +142,8 @@ fn read_json_or_default(path: &Path) -> Result<serde_json::Value> {
 
 fn ensure_sessionstart_hook_in_file(path: &Path) -> Result<bool> {
     let mut root = read_json_or_default(path)?;
-    let written = ensure_sessionstart_hook(&mut root);
+    let written = ensure_sessionstart_hook(&mut root)
+        .with_context(|| format!("configuring SessionStart in {}", path.display()))?;
     if written {
         std::fs::write(path, serde_json::to_string_pretty(&root)?)?;
         ui::step(
@@ -225,26 +231,29 @@ pub fn sessionstart_hook_present(root: &serde_json::Value) -> bool {
         })
 }
 
-fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> bool {
+fn ensure_sessionstart_hook(root: &mut serde_json::Value) -> Result<bool> {
     const CMD: &str = "csm hook";
     if sessionstart_hook_present(root) {
-        return false;
+        return Ok(false);
     }
 
-    if root.get("hooks").is_none() {
-        root["hooks"] = serde_json::json!({});
-    }
-    if !root["hooks"]["SessionStart"].is_array() {
-        root["hooks"]["SessionStart"] = serde_json::json!([]);
-    }
-    let arr = root["hooks"]["SessionStart"]
+    let hooks = root
+        .as_object_mut()
+        .context("expected a JSON object")?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .context("expected hooks to be a JSON object")?;
+    let arr = hooks
+        .entry("SessionStart")
+        .or_insert_with(|| serde_json::json!([]))
         .as_array_mut()
-        .expect("SessionStart is an array");
+        .context("expected SessionStart to be a JSON array")?;
     arr.push(serde_json::json!({
         "matcher": "",
         "hooks": [{ "type": "command", "command": CMD }]
     }));
-    true
+    Ok(true)
 }
 
 /// Resolve the bare executable name used by the installed hook.
@@ -386,7 +395,7 @@ mod tests {
         #[test]
         fn ensure_adds_when_absent() {
             let mut root = serde_json::json!({});
-            assert!(ensure_sessionstart_hook(&mut root));
+            assert!(ensure_sessionstart_hook(&mut root).unwrap());
             assert!(sessionstart_hook_present(&root));
         }
 
@@ -394,16 +403,29 @@ mod tests {
         fn ensure_is_noop_when_present() {
             let mut root = wired();
             let before = root.clone();
-            assert!(!ensure_sessionstart_hook(&mut root));
+            assert!(!ensure_sessionstart_hook(&mut root).unwrap());
             assert_eq!(root, before);
         }
 
         #[test]
         fn ensure_adds_into_existing_hooks_object() {
             let mut root = serde_json::json!({ "hooks": { "Stop": [] } });
-            assert!(ensure_sessionstart_hook(&mut root));
+            assert!(ensure_sessionstart_hook(&mut root).unwrap());
             assert!(sessionstart_hook_present(&root));
             assert!(root["hooks"]["Stop"].is_array());
+        }
+
+        #[test]
+        fn malformed_hook_config_is_preserved() {
+            for mut root in [
+                serde_json::json!([]),
+                serde_json::json!({ "hooks": false }),
+                serde_json::json!({ "hooks": { "SessionStart": "invalid" } }),
+            ] {
+                let before = root.clone();
+                assert!(ensure_sessionstart_hook(&mut root).is_err());
+                assert_eq!(root, before);
+            }
         }
     }
 
@@ -418,6 +440,18 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let target = dir.path().join("CLAUDE.md");
             (dir, target)
+        }
+
+        #[test]
+        #[serial]
+        fn unreadable_prompt_is_preserved() {
+            with_csm_home(|_home| {
+                let (_dir, target) = temp_target();
+                let content = b"existing instructions\xff";
+                fs::write(&target, content).unwrap();
+                assert!(inject_file(&target).is_err());
+                assert_eq!(fs::read(&target).unwrap(), content);
+            });
         }
 
         #[test]

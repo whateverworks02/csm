@@ -5,8 +5,10 @@ use crate::store;
 use crate::ui;
 use crate::workspace;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -109,12 +111,33 @@ fn summarize_and_exit(checks: &[Check], hint_fix: bool) -> ! {
 }
 
 fn consistency_checks(out: &mut Vec<Check>) {
-    let idx = store::load_index().unwrap_or_default();
+    let idx = match store::load_index() {
+        Ok(index) => index,
+        Err(error) => {
+            out.push(Check {
+                category: Category::Consistency,
+                label: "index".into(),
+                status: Status::Error,
+                detail: format!("{error:#}"),
+                fix: None,
+            });
+            return;
+        }
+    };
 
     for (name, meta) in &idx.sessions {
         let dir = match store::session_dir(name) {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(error) => {
+                out.push(Check {
+                    category: Category::Consistency,
+                    label: name.clone(),
+                    status: Status::Error,
+                    detail: format!("{error:#}"),
+                    fix: None,
+                });
+                continue;
+            }
         };
         if !dir.exists() {
             out.push(Check {
@@ -183,6 +206,15 @@ fn orphan_dirs(idx: &store::Index) -> Vec<(String, PathBuf)> {
     let Ok(entries) = fs::read_dir(&sessions_dir) else {
         return Vec::new();
     };
+    let tracked_dirs: HashSet<_> = idx
+        .sessions
+        .keys()
+        .filter_map(|name| {
+            let dir = store::session_dir(name).ok()?;
+            let meta = fs::symlink_metadata(dir).ok()?;
+            Some((meta.dev(), meta.ino()))
+        })
+        .collect();
     entries
         .flatten()
         .filter_map(|e| {
@@ -190,7 +222,9 @@ fn orphan_dirs(idx: &store::Index) -> Vec<(String, PathBuf)> {
                 return None;
             }
             let fname = e.file_name().to_string_lossy().to_string();
-            if idx.sessions.contains_key(&fname) {
+            if e.metadata()
+                .is_ok_and(|meta| tracked_dirs.contains(&(meta.dev(), meta.ino())))
+            {
                 return None;
             }
             Some((fname, e.path()))
@@ -493,7 +527,7 @@ mod tests {
     fn detects_ghost_session() {
         with_csm_home(|_dir| {
             store::touch_session("ghost", "/o").unwrap();
-            assert!(!store::session_dir("ghost").unwrap().exists());
+            fs::remove_dir_all(store::session_dir("ghost").unwrap()).unwrap();
             let checks = consistency();
             let ghost = checks
                 .iter()
@@ -538,8 +572,8 @@ mod tests {
     #[serial]
     fn fix_ghost_scaffolds_and_is_idempotent() {
         with_csm_home(|_dir| {
-            let _meta = store::touch_session("ghost", "/o").unwrap();
-            assert!(!store::session_dir("ghost").unwrap().exists());
+            store::touch_session("ghost", "/o").unwrap();
+            fs::remove_dir_all(store::session_dir("ghost").unwrap()).unwrap();
             let checks = consistency();
             let fix = checks
                 .iter()
