@@ -130,6 +130,8 @@ impl Agent for OpenCodeAgent {
     fn launch(&self, name: &str) -> Command {
         // OpenCode loads the snapshot at launch from a file listed in its inline config.
         let mut cmd = session_command(self.id(), name);
+        // The background service does not share the client's launch environment.
+        cmd.arg("--standalone");
         match write_context_snapshot(name) {
             Ok(path) => {
                 cmd.env(
