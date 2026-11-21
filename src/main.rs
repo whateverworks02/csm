@@ -11,13 +11,20 @@ use std::io::Write;
 #[command(
     name = "csm",
     version,
-    about = "Workspace memory for coding agents (cross-time, cross-repo)",
-    after_help = "Run `csm <name>` to start a session; bare `csm` (or `csm -a <agent>`) picks a local or cross-repo session.\n\nIf the name matches a subcommand, put `--` before the name. For example, `csm -- sprint` launches the session named `sprint`. To choose an agent explicitly, use `csm -a codex -- sprint`."
+    about = "Workspace memory for coding agents\n\n\
+             Common commands\n  \
+             csm              Pick a session from this directory or another repository\n  \
+             csm <name>       Start or resume a named session and launch the agent\n  \
+             csm show <name>  Show a session's context and task board",
+    after_help = "Agent examples\n  \
+                  csm -a codex           Open the picker and launch with Codex\n  \
+                  csm -a pi <name>       Launch a named session with Pi\n  \
+                  csm <name> -a pi       Put the agent option after the session name\n\n\
+                  If the session name matches a subcommand, put `--` before the name.\n\
+                  For example, `csm -- sprint` or `csm -a codex -- sprint`."
 )]
 struct Cli {
-    /// Agent to launch (claude, pi, codex, opencode; default claude). May lead
-    /// (`csm -a pi <name>`) or trail (`csm <name> -a pi`); without a session
-    /// name, `csm -a <agent>` opens the picker for this directory.
+    /// Agent to launch (claude, pi, codex, opencode). Defaults to claude.
     #[arg(short = 'a', long = "agent", value_name = "AGENT", global = true)]
     agent: Option<String>,
 
@@ -35,6 +42,12 @@ enum Cmd {
     },
 
     /// Show the active sessions selected for the current sprint.
+    #[command(after_help = "Manage sprint membership\n  \
+                            csm sprint add [NAME]     Add an active session\n  \
+                            csm sprint remove [NAME]  Remove a session from the sprint\n\n\
+                            Omit NAME to pick an active session. Add lists sessions outside the\n\
+                            sprint, and remove lists sessions in the sprint. Removing a session\n\
+                            only changes its sprint membership and keeps its workspace.")]
     Sprint {
         #[command(subcommand)]
         action: Option<SprintAction>,
@@ -46,15 +59,19 @@ enum Cmd {
     /// Unpin a session.
     Unpin { name: String },
 
-    /// Archive a session: retained on disk, out of the daily surfaces and gc.
-    Archive { name: String },
+    /// Exclude a session from active lists, pickers, and gc while keeping its workspace on disk.
+    Archive {
+        /// Session to archive.
+        name: String,
+    },
 
     /// Unarchive a session, returning it to the active surfaces.
     Unarchive { name: String },
 
-    /// Hard-delete a session (workspace dir + index entry).
+    /// Permanently delete a session's workspace directory and index entry.
     #[command(aliases = ["remove", "delete", "del"])]
     Rm {
+        /// Session to delete.
         name: String,
         /// Allow deleting a pinned session.
         #[arg(short = 'f', long)]
@@ -67,19 +84,23 @@ enum Cmd {
     /// Rename a session and re-point its origin_pwd to the current directory.
     Rename { old: String, new: String },
 
-    /// Show a session as a compact recognition card.
+    /// Show a session's context and task board.
     Show {
-        /// Session name. Defaults to `$CSM_SESSION`, else opens a picker.
+        /// Session name. Defaults to a nonempty $CSM_SESSION or opens a picker.
         name: Option<String>,
     },
 
-    /// Garbage-collect unpinned sessions; sessions whose board still holds
-    /// unfinished tasks are kept.
+    /// Permanently delete active, unpinned sessions with no unfinished tasks.
+    ///
+    /// Pick eligible sessions or use --older-than to select by age. Deletion removes
+    /// each selected session's workspace directory and index entry.
     Gc {
-        /// Delete unpinned sessions not accessed in the last N days.
+        /// Select all eligible sessions last accessed at least N days ago.
+        /// Use 0 through 9223372036854775807 days. Larger values can select
+        /// recently accessed sessions.
         #[arg(long, value_name = "N")]
         older_than: Option<u64>,
-        /// Skip confirmation.
+        /// Skip confirmation. Without --older-than, you still select the sessions.
         #[arg(short = 'y', long)]
         yes: bool,
     },
@@ -122,7 +143,7 @@ enum SprintAction {
         /// Session name. Omit to pick an active session outside the sprint.
         name: Option<String>,
     },
-    /// Remove a session from the sprint.
+    /// Remove a session from the sprint and keep its workspace.
     Remove {
         /// Session name. Omit to pick an active session in the sprint.
         name: Option<String>,
