@@ -5,6 +5,7 @@ use crate::ui;
 use crate::workspace;
 use anyhow::Result;
 use chrono::Local;
+use std::collections::HashSet;
 
 struct Candidate<'a> {
     name: &'a str,
@@ -74,23 +75,25 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     print_collectable(&deletable);
 
     let to_delete: Vec<String> = if older_than.is_some() {
-        if yes
-            || ui::confirm(&format!(
-                "delete all {} listed session(s)?",
-                deletable.len()
-            ))?
-        {
+        if yes || confirm_deletion(deletable.len(), "listed")? {
             names(&deletable)
         } else {
             eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
             return Ok(());
         }
     } else {
+        let choices = if deletable.len() == 1 {
+            "1".to_string()
+        } else {
+            format!("1–{}", deletable.len())
+        };
         eprint!(
             "\n{} ",
             ui::epaint(
                 ui::DIM,
-                "select indices to delete (comma-separated), 'a' for all, 'q' to quit:"
+                &format!(
+                    "Select sessions to delete ({choices}, comma-separated, a for all, q to cancel):"
+                )
             ),
         );
         let mut line = String::new();
@@ -102,15 +105,22 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
         }
         let selected = select_from_line(line, &names(&deletable));
         if selected.is_empty() {
-            eprintln!("{}", ui::epaint(ui::DIM, "nothing selected"));
+            eprintln!(
+                "{}",
+                ui::epaint(
+                    ui::DIM,
+                    &format!("No valid selection. Choose {choices}, a for all, or q to cancel.")
+                )
+            );
             return Ok(());
         }
         if !yes {
             eprintln!("{}", ui::epaint(ui::BOLD, "will delete:"));
-            for n in &selected {
+            let mut targets = HashSet::new();
+            for n in selected.iter().filter(|name| targets.insert(*name)) {
                 eprintln!("  {}", ui::epaint(ui::CYAN_BOLD, n));
             }
-            if !ui::confirm("proceed?")? {
+            if !confirm_deletion(targets.len(), "selected")? {
                 eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
                 return Ok(());
             }
@@ -125,6 +135,11 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn confirm_deletion(count: usize, source: &str) -> Result<bool> {
+    let noun = if count == 1 { "session" } else { "sessions" };
+    ui::confirm(&format!("Permanently delete {count} {source} {noun}?"))
 }
 
 fn unfinished_tasks(name: &str) -> usize {
