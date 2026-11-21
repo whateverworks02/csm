@@ -123,7 +123,10 @@ enum SprintAction {
         name: Option<String>,
     },
     /// Remove a session from the sprint.
-    Remove { name: String },
+    Remove {
+        /// Session name. Omit to pick an active session in the sprint.
+        name: Option<String>,
+    },
 }
 
 fn main() {
@@ -424,36 +427,42 @@ fn print_session_choices(label: &str, rows: &[(&String, &store::SessionMeta)]) {
 
 fn pick_session(label: &str, rows: &[(&String, &store::SessionMeta)]) -> Result<Option<String>> {
     print_session_choices(label, rows);
-    let line = read_picker_input(&format!("select a session (1-{}), 'q' to quit", rows.len()))?;
+    let numbers = if rows.len() == 1 {
+        "1".to_string()
+    } else {
+        format!("1-{}", rows.len())
+    };
+    let options = format!("Enter {numbers} or q to cancel");
+    let line = read_picker_input(&options)?;
     if line.is_empty() || line.eq_ignore_ascii_case("q") {
-        eprintln!("{}", ui::epaint(ui::DIM, "aborted"));
+        eprintln!("{}", ui::epaint(ui::DIM, "Cancelled."));
         return Ok(None);
     }
     match line.parse::<usize>() {
         Ok(i) if i >= 1 && i <= rows.len() => Ok(Some(rows[i - 1].0.clone())),
         _ => {
             eprintln!(
-                "{} {}",
-                ui::epaint(ui::RED_BOLD, "invalid selection:"),
-                line,
+                "{} {options}.",
+                ui::epaint(ui::RED_BOLD, "Invalid selection."),
             );
             Ok(None)
         }
     }
 }
 
-fn pick_session_all() -> Result<Option<String>> {
+fn pick_session_to_show() -> Result<Option<String>> {
     let idx = store::load_index()?;
-    if idx.sessions.is_empty() {
-        ui::no_sessions_hint();
-        return Ok(None);
-    }
     let rows = list_rows(&idx, false);
     if rows.is_empty() {
-        ui::no_active_sessions_hint();
+        eprintln!("No active sessions to show.");
+        if idx.sessions.is_empty() {
+            ui::hint("Start a session with `csm <name>`.");
+        } else {
+            ui::hint("List archived sessions with `csm list --archived`.");
+        }
         return Ok(None);
     }
-    pick_session("all sessions", &rows)
+    pick_session("Select a session to show", &rows)
 }
 
 /// Resolve an explicit name, then `$CSM_SESSION`, then the interactive picker.
@@ -462,7 +471,7 @@ fn resolve_session_name(name: Option<String>) -> Result<Option<String>> {
         Some(n) => Ok(Some(n)),
         None => match std::env::var("CSM_SESSION") {
             Ok(n) if !n.is_empty() => Ok(Some(n)),
-            _ => Ok(pick_session_all()?),
+            _ => pick_session_to_show(),
         },
     }
 }
@@ -532,10 +541,10 @@ fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
                 let mut rows = list_rows(&idx, false);
                 rows.retain(|(_, meta)| !meta.in_sprint);
                 if rows.is_empty() {
-                    eprintln!("no active sessions to add to the sprint.");
+                    eprintln!("No active sessions to add to the sprint.");
                     return Ok(());
                 }
-                let Some(name) = pick_session("sessions available to add to the sprint", &rows)?
+                let Some(name) = pick_session("Select a session to add to the sprint", &rows)?
                 else {
                     return Ok(());
                 };
@@ -545,6 +554,22 @@ fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
             ui::done("added to sprint", &name);
         }
         Some(SprintAction::Remove { name }) => {
+            let name = if let Some(name) = name {
+                name
+            } else {
+                let idx = store::load_index()?;
+                let mut rows = list_rows(&idx, false);
+                rows.retain(|(_, meta)| meta.in_sprint);
+                if rows.is_empty() {
+                    eprintln!("No active sessions to remove from the sprint.");
+                    return Ok(());
+                }
+                let Some(name) = pick_session("Select a session to remove from the sprint", &rows)?
+                else {
+                    return Ok(());
+                };
+                name
+            };
             store::set_in_sprint(&name, false)?;
             ui::done("removed from sprint", &name);
         }
@@ -555,7 +580,7 @@ fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
                 .filter(|(_, meta)| meta.in_sprint)
                 .peekable();
             if rows.peek().is_none() {
-                eprintln!("no active sprint sessions. Run `csm sprint add` to pick one.");
+                eprintln!("No active sessions in the sprint. Run `csm sprint add` to add one.");
             }
             for (name, _) in rows {
                 println!("{}", ui::paint(ui::CYAN_BOLD, name));
