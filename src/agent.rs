@@ -102,7 +102,17 @@ impl Agent for CodexAgent {
     }
 
     fn launch(&self, name: &str) -> Command {
-        session_command(self.id(), name)
+        let mut command = session_command(self.id(), name);
+        // A shared Codex daemon uses its own startup environment for hooks
+        // and commands. Keep the default launch if the capability probe fails.
+        if Command::new(self.id())
+            .args(["--no-daemon", "--version"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            command.arg("--no-daemon");
+        }
+        command
     }
 
     fn install(&self) -> Result<()> {
