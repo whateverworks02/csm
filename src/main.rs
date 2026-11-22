@@ -61,8 +61,8 @@ enum Cmd {
 
     /// Exclude a session from active lists, pickers, and gc while keeping its workspace on disk.
     Archive {
-        /// Session to archive.
-        name: String,
+        /// Session to archive. Omit to pick an active session.
+        name: Option<String>,
     },
 
     /// Unarchive a session, returning it to the active surfaces.
@@ -71,9 +71,9 @@ enum Cmd {
     /// Permanently delete a session's workspace directory and index entry.
     #[command(aliases = ["remove", "delete", "del"])]
     Rm {
-        /// Session to delete.
-        name: String,
-        /// Allow deleting a pinned session.
+        /// Session to delete. Omit to pick an active session.
+        name: Option<String>,
+        /// Allow deleting pinned sessions and include them in the picker.
         #[arg(short = 'f', long)]
         force: bool,
         /// Skip confirmation.
@@ -178,9 +178,9 @@ fn try_main() -> Result<()> {
             ui::done("unpinned", &name);
             Ok(())
         }
-        Some(Cmd::Archive { name }) => cmd_set_archived(&name, true),
-        Some(Cmd::Unarchive { name }) => cmd_set_archived(&name, false),
-        Some(Cmd::Rm { name, force, yes }) => cmd_rm(&name, force, yes),
+        Some(Cmd::Archive { name }) => cmd_archive(name),
+        Some(Cmd::Unarchive { name }) => cmd_set_archived(&name, false, None),
+        Some(Cmd::Rm { name, force, yes }) => cmd_rm(name, force, yes),
         Some(Cmd::Rename { old, new }) => cmd_rename(&old, &new),
         Some(Cmd::Show { name }) => cmd_show(name),
         Some(Cmd::Gc { older_than, yes }) => gc::run(older_than, yes),
@@ -195,13 +195,27 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn cmd_set_archived(name: &str, archived: bool) -> Result<()> {
+fn cmd_archive(name: Option<String>) -> Result<()> {
+    if let Some(name) = name {
+        return cmd_set_archived(&name, true, None);
+    }
+    if let Some((name, created_at)) = pick_active_session("archive", true)? {
+        cmd_set_archived(&name, true, Some(&created_at))?;
+    }
+    Ok(())
+}
+
+fn cmd_set_archived(name: &str, archived: bool, picked_at: Option<&str>) -> Result<()> {
     let (verb, state) = if archived {
         ("archived", "already archived")
     } else {
         ("unarchived", "already active")
     };
-    if store::set_archived(name, archived)? {
+    let changed = match picked_at {
+        Some(created_at) => store::archive_picked_session(name, created_at)?,
+        None => store::set_archived(name, archived)?,
+    };
+    if changed {
         ui::done(verb, name);
     } else {
         eprintln!("{}", ui::epaint(ui::DIM, &format!("{state}: {name}")));
@@ -468,6 +482,28 @@ fn pick_session(label: &str, rows: &[(&String, &store::SessionMeta)]) -> Result<
     }
 }
 
+fn pick_active_session(action: &str, include_pinned: bool) -> Result<Option<(String, String)>> {
+    let idx = store::load_index()?;
+    let mut rows = list_rows(&idx, false);
+    if !include_pinned {
+        rows.retain(|(_, meta)| !meta.pinned);
+    }
+    if rows.is_empty() {
+        let candidates = if include_pinned {
+            "active"
+        } else {
+            "unpinned active"
+        };
+        eprintln!("No {candidates} sessions to {action}.");
+        return Ok(None);
+    }
+    let Some(name) = pick_session(&format!("Select a session to {action}"), &rows)? else {
+        return Ok(None);
+    };
+    let created_at = idx.sessions[&name].created_at.clone();
+    Ok(Some((name, created_at)))
+}
+
 fn pick_session_to_show() -> Result<Option<String>> {
     let idx = store::load_index()?;
     let rows = list_rows(&idx, false);
@@ -609,16 +645,29 @@ fn cmd_sprint(action: Option<SprintAction>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
-    let meta = store::require_session(name)?;
-    if meta.pinned && !force {
-        anyhow::bail!(
-            "session `{}` is pinned; pass --force to delete anyway",
-            name
+fn cmd_rm(name: Option<String>, force: bool, yes: bool) -> Result<()> {
+    let (name, picked_at) = if let Some(name) = name {
+        (name, None)
+    } else {
+        let Some((name, created_at)) = pick_active_session("delete", force)? else {
+            return Ok(());
+        };
+        (name, Some(created_at))
+    };
+    let check_target = |meta: &store::SessionMeta| {
+        if let Some(created_at) = picked_at.as_deref() {
+            store::check_picked_session(&name, created_at, meta)?;
+        }
+        anyhow::ensure!(
+            !meta.pinned || force,
+            "session `{name}` is pinned; pass --force to delete anyway"
         );
-    }
+        Ok(())
+    };
+    let meta = store::require_session(&name)?;
+    check_target(&meta)?;
     if !yes {
-        let dir = store::session_dir(name)?;
+        let dir = store::session_dir(&name)?;
         let msg = format!(
             "delete session `{}` and its workspace at {}?",
             name,
@@ -629,8 +678,8 @@ fn cmd_rm(name: &str, force: bool, yes: bool) -> Result<()> {
             return Ok(());
         }
     }
-    store::delete_session(name)?;
-    ui::done("deleted", name);
+    store::delete_session_if(&name, check_target)?;
+    ui::done("deleted", &name);
     Ok(())
 }
 
@@ -972,13 +1021,39 @@ mod tests {
             _ => panic!("expected list --archived"),
         }
         match Cli::parse_from(["csm", "archive", "api"]).command {
-            Some(Cmd::Archive { name }) => assert_eq!(name, "api"),
+            Some(Cmd::Archive { name }) => assert_eq!(name.as_deref(), Some("api")),
             _ => panic!("expected archive"),
         }
         match Cli::parse_from(["csm", "unarchive", "api"]).command {
             Some(Cmd::Unarchive { name }) => assert_eq!(name, "api"),
             _ => panic!("expected unarchive"),
         }
+    }
+
+    #[test]
+    fn cli_parses_archive_and_delete_pickers() {
+        assert!(matches!(
+            Cli::parse_from(["csm", "archive"]).command,
+            Some(Cmd::Archive { name: None })
+        ));
+        for action in ["rm", "remove", "delete", "del"] {
+            assert!(matches!(
+                Cli::parse_from(["csm", action, "--force", "--yes"]).command,
+                Some(Cmd::Rm {
+                    name: None,
+                    force: true,
+                    yes: true,
+                })
+            ));
+        }
+        assert!(matches!(
+            Cli::parse_from(["csm", "del", "api"]).command,
+            Some(Cmd::Rm {
+                name: Some(name),
+                force: false,
+                yes: false,
+            }) if name == "api"
+        ));
     }
 
     fn meta(origin: &str, last_access: &str, archived_at: Option<&str>) -> store::SessionMeta {

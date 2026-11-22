@@ -231,11 +231,30 @@ pub fn set_pinned(name: &str, pinned: bool) -> Result<()> {
 }
 
 pub fn set_archived(name: &str, archived: bool) -> Result<bool> {
+    set_archived_matching(name, archived, None)
+}
+
+pub fn archive_picked_session(name: &str, created_at: &str) -> Result<bool> {
+    set_archived_matching(name, true, Some(created_at))
+}
+
+pub fn check_picked_session(name: &str, created_at: &str, meta: &SessionMeta) -> Result<()> {
+    anyhow::ensure!(
+        !meta.is_archived() && meta.created_at == created_at,
+        "session {name:?} is no longer available. Reopen the picker to choose again"
+    );
+    Ok(())
+}
+
+fn set_archived_matching(name: &str, archived: bool, picked_at: Option<&str>) -> Result<bool> {
     let (_lock, mut idx) = load_index_for_update()?;
     let meta = idx
         .sessions
         .get_mut(name)
         .with_context(|| format!("no csm session named {:?}", name))?;
+    if let Some(created_at) = picked_at {
+        check_picked_session(name, created_at, meta)?;
+    }
     let changed = archived != meta.is_archived();
     if changed {
         meta.archived_at = archived.then(now_iso);
@@ -310,10 +329,17 @@ pub fn rename_session(old: &str, new: &str, new_origin_pwd: &str) -> Result<()> 
 }
 
 pub fn delete_session(name: &str) -> Result<()> {
+    delete_session_if(name, |_| Ok(()))
+}
+
+/// Check eligibility under the index lock immediately before deletion.
+pub fn delete_session_if(name: &str, check: impl FnOnce(&SessionMeta) -> Result<()>) -> Result<()> {
     let (_lock, mut idx) = load_index_for_update()?;
-    if !idx.sessions.contains_key(name) {
-        anyhow::bail!("no csm session named {:?}", name);
-    }
+    let meta = idx
+        .sessions
+        .get(name)
+        .with_context(|| format!("no csm session named {:?}", name))?;
+    check(meta)?;
     let dir = session_dir(name)?;
     if !workspace_is_shared(&dir, name, &idx)? {
         match std::fs::remove_dir_all(&dir) {
