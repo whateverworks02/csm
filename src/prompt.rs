@@ -32,7 +32,7 @@ Before acting, identify the work concerned, the action the user requested, and i
 | --- | --- | --- |
 | Discuss or confirm a plan | For discussion, investigate and propose the approach, task breakdown, and procedure. On confirmation, create new tasks in Open and revise existing tasks in place. Preserve existing statuses unless the request calls for a transition in this table | Proposal delivered, or confirmed plan recorded |
 | Ask for an explanation | Answer from the relevant task and verify the facts needed for the answer. Propose a change if warranted | Answer delivered; requirements and status unchanged |
-| Execute agreed work | Implement and verify within scope; record outcomes and any blocker | Task records updated; line at Pending review, whether completed or stuck |
+| Execute agreed work | Implement and verify within scope; record outcomes and any blocker | Update task records. Use Pending review whether completed or stuck, subject to the exceptions below. |
 | Review submitted work | Check against AC; write Review and answer Open questions; approve to Done or return to Pending fix. Report required fixes for the execution phase | Verdict recorded; reviewed board lines moved |
 | Request a change to existing work | Amend that task's Scope, AC, and SOP as needed. A request limited to changing the plan reopens submitted or Done work to Pending fix and ends; otherwise implement and verify the requested change | Revised plan recorded if that was the limit; otherwise the execution endpoint |
 | Authorize opening a PR after local review | Create the PR from the reviewed work and record its link in Progress | Link recorded |
