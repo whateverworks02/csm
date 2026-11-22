@@ -19,7 +19,7 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
     let idx = store::load_index()?;
     let now = Local::now();
 
-    let mut candidates = idx
+    let eligible = idx
         .sessions
         .iter()
         .filter(|(_, m)| !m.pinned && !m.is_archived())
@@ -29,16 +29,22 @@ pub fn run(older_than: Option<u64>, yes: bool) -> Result<()> {
                     t <= now && u64::try_from((now - t).num_days()).is_ok_and(|age| age >= d)
                 })
             })
-        })
-        .map(|(name, meta)| {
-            let dir = store::session_dir(name)?;
-            Ok(Candidate {
-                name,
-                meta,
-                unfinished: unfinished_tasks(&dir)?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+        });
+    let mut candidates = Vec::new();
+    for (name, meta) in eligible {
+        let dir = store::session_dir(name)?;
+        let Some(unfinished) = unfinished_tasks(&dir)? else {
+            ui::warn(&format!(
+                "skipping session {name:?}: missing tasks/INDEX.md"
+            ));
+            continue;
+        };
+        candidates.push(Candidate {
+            name,
+            meta,
+            unfinished,
+        });
+    }
     candidates.sort_by(|a, b| b.meta.last_access.cmp(&a.meta.last_access));
 
     if candidates.is_empty() {
@@ -155,11 +161,13 @@ fn confirm_deletion(count: usize, source: &str) -> Result<bool> {
     ui::confirm(&format!("Permanently delete {count} {source} {noun}?"))
 }
 
-fn unfinished_tasks(dir: &Path) -> Result<usize> {
+fn unfinished_tasks(dir: &Path) -> Result<Option<usize>> {
     let path = dir.join("tasks/INDEX.md");
     match std::fs::read_to_string(&path) {
-        Ok(board) => Ok(workspace::parse_tasks_board(&board).unfinished_count()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Ok(board) => Ok(Some(
+            workspace::parse_tasks_board(&board).unfinished_count(),
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("reading task board {}", path.display())),
     }
 }
@@ -390,13 +398,31 @@ mod tests {
 
     #[test]
     #[serial]
-    fn boardless_session_is_collected() {
+    fn keeps_session_with_missing_board_and_collects_other_candidates() {
+        with_csm_home(|_dir| {
+            scaffold_session("missing-board");
+            let dir = store::session_dir("missing-board").unwrap();
+            std::fs::remove_file(dir.join("tasks/INDEX.md")).unwrap();
+            scaffold_session("idle");
+
+            run(Some(0), true).unwrap();
+
+            assert!(dir.join("state.md").is_file());
+            assert!(store::require_session("missing-board").is_ok());
+            assert!(!dir_exists("idle"));
+            assert!(store::require_session("idle").is_err());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn keeps_index_entry_when_workspace_is_missing() {
         with_csm_home(|_dir| {
             store::touch_session("ghost", "/o").unwrap();
             std::fs::remove_dir_all(store::session_dir("ghost").unwrap()).unwrap();
             backdate("ghost", 10);
             run(Some(5), true).unwrap();
-            assert!(store::require_session("ghost").is_err());
+            assert!(store::require_session("ghost").is_ok());
         });
     }
 
