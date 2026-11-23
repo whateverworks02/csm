@@ -169,15 +169,6 @@ impl TasksBoard {
             .map(|(entries, _)| entries.len())
             .sum()
     }
-
-    pub fn status_of(&self, id: &str) -> Option<Status> {
-        for (entries, status) in self.sections() {
-            if entries.iter().any(|e| entry_id(e) == Some(id)) {
-                return Some(status);
-            }
-        }
-        None
-    }
 }
 
 fn split_needs_tail(entry: &str) -> Option<(&str, &str)> {
@@ -195,12 +186,10 @@ pub fn entry_id(entry: &str) -> Option<&str> {
     entry_head(entry).split_whitespace().next()
 }
 
-/// One `needs:` reference: `<task-id>` (same session) or `<session>/<task-id>`
-/// (cross-session boundary). A trailing `[...]` is a delivery condition that
+/// A task ID from the same board. A trailing `[...]` is a delivery condition that
 /// must be verified before the task counts as ready - never assumed met.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeedRef {
-    pub session: Option<String>,
     pub task: String,
     pub condition: Option<String>,
 }
@@ -278,32 +267,13 @@ fn parse_ref(chunk: &str) -> Option<NeedRef> {
         _ => return None,
     };
     let ref_part = ref_part.trim();
-    if ref_part.is_empty() || ref_part.chars().any(char::is_whitespace) {
+    if !is_token(ref_part) {
         return None;
     }
-    let (session, task) = match ref_part.split_once('/') {
-        None if is_token(ref_part) => (None, ref_part.to_string()),
-        Some((s, t)) if is_session_component(s) && is_token(t) => {
-            (Some(s.to_string()), t.to_string())
-        }
-        _ => return None,
-    };
     Some(NeedRef {
-        session,
-        task,
+        task: ref_part.to_string(),
         condition,
     })
-}
-
-/// Session names may include dots and Unicode. Keep the reference within one
-/// directory component and exclude the needs-tail delimiters.
-fn is_session_component(s: &str) -> bool {
-    !s.is_empty()
-        && s != "."
-        && s != ".."
-        && !s.chars().any(|c| {
-            c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '[' | ']' | ',')
-        })
 }
 
 fn is_token(s: &str) -> bool {
@@ -312,18 +282,13 @@ fn is_token(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-pub fn entry_needs_tail(entry: &str) -> Option<&str> {
-    let (_, tail) = split_needs_tail(entry)?;
-    parse_tail_text(tail).unparseable.is_none().then_some(tail)
-}
-
 /// Sort nonnumeric IDs by text, then numeric IDs by value with text as a tie breaker.
 pub fn entry_id_key(entry: &str) -> (Option<u64>, &str) {
     let id = entry_id(entry).unwrap_or("");
     (id.parse().ok(), id)
 }
 
-/// Render task heads and valid dependency tails for the session snapshot.
+/// Render the board snapshot, retaining invalid tails so blockers stay visible.
 pub fn render_board(board: &TasksBoard) -> String {
     let mut out = String::new();
     for (entries, status) in board.sections() {
@@ -342,11 +307,7 @@ pub fn render_board(board: &TasksBoard) -> String {
         }
         for entry in ordered {
             out.push_str("- ");
-            out.push_str(entry_head(entry));
-            if let Some(tail) = entry_needs_tail(entry) {
-                out.push(' ');
-                out.push_str(tail);
-            }
+            out.push_str(entry);
             out.push('\n');
         }
     }
@@ -723,15 +684,13 @@ mod tests {
         assert_eq!(
             t.refs,
             vec![NeedRef {
-                session: None,
                 task: "001".into(),
                 condition: None
             }]
         );
 
-        let t = parse_needs_tail("004 e2e needs: api-contract/012 [interface PR merged], 003");
+        let t = parse_needs_tail("004 e2e needs: 012 [interface PR merged], 003");
         assert_eq!(t.refs.len(), 2);
-        assert_eq!(t.refs[0].session.as_deref(), Some("api-contract"));
         assert_eq!(t.refs[0].task, "012");
         assert_eq!(t.refs[0].condition.as_deref(), Some("interface PR merged"));
         assert_eq!(t.refs[1].task, "003");
@@ -752,6 +711,8 @@ mod tests {
             "001 x needs: 002 [unclosed",
             "001 x needs: 002 []",
             "001 x needs: 002 trailing",
+            "001 x needs: api-contract/012",
+            "001 x needs: ws/002 [gate], 003",
             "001 x needs: a//b",
             "001 x needs: /001",
             "001 x needs: ./001",
@@ -767,26 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn entry_needs_tail_rides_the_line_only_when_it_parses() {
-        use super::entry_needs_tail;
-        assert_eq!(
-            entry_needs_tail("004 e2e needs: 002, 003"),
-            Some("needs: 002, 003")
-        );
-        assert_eq!(entry_needs_tail("012 bad needs: ???"), None);
-        assert_eq!(entry_needs_tail("005 bare"), None);
-    }
-
-    #[test]
-    fn entry_needs_tail_takes_the_line_s_last_occurrence() {
-        use super::entry_needs_tail;
-        assert_eq!(
-            entry_needs_tail("010 graph - document the needs: forest needs: 001"),
-            Some("needs: 001")
-        );
-    }
-
-    #[test]
     fn unfinished_count_sums_every_live_section() {
         let board = parse_tasks_board(
             "## Open\n- 001 a\n\n## Pending review\n- 002 b\n\n\
@@ -798,15 +739,6 @@ mod tests {
             0
         );
         assert_eq!(parse_tasks_board("## Open\n").unfinished_count(), 0);
-    }
-
-    #[test]
-    fn status_of_finds_entries_across_sections() {
-        use super::Status;
-        let board = parse_tasks_board("## Open\n- 001 a needs: 002\n\n## Done\n- 002 b\n");
-        assert_eq!(board.status_of("001"), Some(Status::Open));
-        assert_eq!(board.status_of("002"), Some(Status::Done));
-        assert_eq!(board.status_of("003"), None);
     }
 
     #[test]
@@ -863,21 +795,19 @@ mod tests {
 
     #[test]
     fn render_board_keeps_the_tail_verbatim_and_no_view_marker() {
-        let board = parse_tasks_board(
-            "## Open\n- 004 e2e needs: api-contract/012 [interface PR merged], 003\n",
-        );
+        let board = parse_tasks_board("## Open\n- 004 e2e needs: 012 [interface PR merged], 003\n");
         let rendered = render_board(&board);
         assert_eq!(
             rendered,
-            "## Open\n- 004 e2e needs: api-contract/012 [interface PR merged], 003\n"
+            "## Open\n- 004 e2e needs: 012 [interface PR merged], 003\n"
         );
         assert!(!rendered.contains(crate::ui::T_VIEW));
     }
 
     #[test]
-    fn render_board_drops_a_tail_the_grammar_rejects() {
-        let board = parse_tasks_board("## Open\n- 012 bad needs: ???\n");
-        assert_eq!(render_board(&board), "## Open\n- 012 bad\n");
+    fn render_board_keeps_unsupported_dependency_visible() {
+        let md = "## Open\n- 012 bad needs: api-contract/003\n";
+        assert_eq!(render_board(&parse_tasks_board(md)), md);
     }
 
     #[test]
