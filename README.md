@@ -48,8 +48,8 @@ Agents update the Markdown files as they work. Detailed task records live
 in `tasks/`, and decisions that span tasks can go in `notes/`.
 
 Ask the agent to record a plan, execute an agreed task, or review submitted
-work. Your request determines which step it takes. The board can track
-dependencies between tasks in the same session or across sessions.
+work. Your request determines which step it takes. Use `needs: 003` on a board
+line to depend on task 003 in the same session.
 
 ## License
 

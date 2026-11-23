@@ -83,10 +83,6 @@ enum RefTarget {
     Itself,
     Local(usize),
     Missing,
-    Foreign {
-        name: String,
-        status: Option<Status>,
-    },
 }
 
 struct LeafView {
@@ -97,25 +93,13 @@ struct LeafView {
 fn leaf_view(
     r: &NeedRef,
     consumer: usize,
-    session: &str,
     entries: &[Entry],
     by_id: &HashMap<&str, usize>,
-    boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
 ) -> LeafView {
-    let local = r.session.as_deref().is_none_or(|s| s == session);
-    let target = if local && r.task == entries[consumer].id {
-        RefTarget::Itself
-    } else if local {
-        match by_id.get(r.task.as_str()) {
-            Some(&i) => RefTarget::Local(i),
-            None => RefTarget::Missing,
-        }
-    } else {
-        let s = r.session.as_deref().unwrap();
-        RefTarget::Foreign {
-            name: format!("{s}/{}", r.task),
-            status: boundary_status(s, &r.task),
-        }
+    let target = match by_id.get(r.task.as_str()) {
+        Some(_) if r.task == entries[consumer].id => RefTarget::Itself,
+        Some(&i) => RefTarget::Local(i),
+        None => RefTarget::Missing,
     };
     let cond = match &r.condition {
         Some(c) => format!(" [{c}]"),
@@ -152,35 +136,10 @@ fn leaf_view(
             ),
             satisfied: false,
         },
-        RefTarget::Foreign { name, status } => match status {
-            Some(s) => {
-                let unverified = if s == Status::Done && r.condition.is_some() {
-                    " (unverified)"
-                } else {
-                    ""
-                };
-                LeafView {
-                    line: format!("{} {name}{cond}{unverified}", status_mark(s)),
-                    satisfied: s == Status::Done && r.condition.is_none(),
-                }
-            }
-            None => LeafView {
-                line: format!(
-                    "{} {name}{cond} (unknown)",
-                    ui::paint(ui::DIM, ui::T_UNKNOWN)
-                ),
-                satisfied: false,
-            },
-        },
     }
 }
 
-pub fn build_view(
-    board: &TasksBoard,
-    session: &str,
-    boundary_status: &mut dyn FnMut(&str, &str) -> Option<Status>,
-    view_ids: &HashSet<String>,
-) -> Option<DepView> {
+pub fn build_view(board: &TasksBoard, view_ids: &HashSet<String>) -> Option<DepView> {
     let entries = collect_entries(board, view_ids);
     let by_id: HashMap<&str, usize> = entries
         .iter()
@@ -234,7 +193,7 @@ pub fn build_view(
                 all_met = false;
             } else {
                 for (j, r) in e.needs.refs.iter().enumerate() {
-                    let lv = leaf_view(r, i, session, &entries, &by_id, boundary_status);
+                    let lv = leaf_view(r, i, &entries, &by_id);
                     all_met &= lv.satisfied;
                     let leaf_last = j + 1 == e.needs.refs.len();
                     lines.push(format!("{rail}{}{}", dim_branch(leaf_last), lv.line));
@@ -248,7 +207,7 @@ pub fn build_view(
         sections.push(SectionLines { status, lines });
     }
 
-    let warning_line = find_cycle(&live_adjacency(&entries, &by_id, session)).map(|cycle| {
+    let warning_line = find_cycle(&live_adjacency(&entries, &by_id)).map(|cycle| {
         let names: Vec<&str> = cycle.iter().map(|&i| entries[i].label.as_str()).collect();
         format!(
             "{} cycle in needs: {}",
@@ -269,20 +228,13 @@ pub fn build_view(
 }
 
 /// Local live-task edges. Self-references are reported separately on their leaves.
-fn live_adjacency(
-    entries: &[Entry],
-    by_id: &HashMap<&str, usize>,
-    session: &str,
-) -> Vec<Vec<usize>> {
+fn live_adjacency(entries: &[Entry], by_id: &HashMap<&str, usize>) -> Vec<Vec<usize>> {
     let mut adj = vec![Vec::new(); entries.len()];
     for (i, e) in entries.iter().enumerate() {
         if e.status == Status::Done {
             continue;
         }
         for r in &e.needs.refs {
-            if r.session.as_deref().is_some_and(|s| s != session) {
-                continue;
-            }
             let Some(&t) = by_id.get(r.task.as_str()) else {
                 continue;
             };
@@ -348,17 +300,13 @@ mod tests {
     use super::*;
     use crate::workspace::parse_tasks_board;
 
-    fn no_boundary(_: &str, _: &str) -> Option<Status> {
-        None
-    }
-
     fn view_ids(ids: &[&str]) -> HashSet<String> {
         ids.iter().map(|s| s.to_string()).collect()
     }
 
     fn view_or_none(md: &str) -> Option<DepView> {
         let board = parse_tasks_board(md);
-        build_view(&board, "csm", &mut no_boundary, &HashSet::new())
+        build_view(&board, &HashSet::new())
     }
 
     fn view(md: &str) -> DepView {
@@ -367,8 +315,7 @@ mod tests {
 
     fn view_with(md: &str, ids: &[&str]) -> DepView {
         let board = parse_tasks_board(md);
-        build_view(&board, "csm", &mut no_boundary, &view_ids(ids))
-            .expect("board has a live needs tail")
+        build_view(&board, &view_ids(ids)).expect("board has a live needs tail")
     }
 
     fn lines(v: &DepView) -> Vec<String> {
@@ -515,51 +462,15 @@ mod tests {
     }
 
     #[test]
-    fn known_done_boundary_satisfies() {
-        let board = parse_tasks_board("# b\n\n## Open\n- 002 api needs: api-contract/012\n");
-        let mut boundary =
-            |s: &str, t: &str| (s == "api-contract" && t == "012").then_some(Status::Done);
-        let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
-        assert_eq!(v.claimable_line, "002");
-        assert_eq!(
-            lines(&v),
-            vec!["└── ○ 002 api", "    └── ✓ api-contract/012"]
-        );
-    }
-
-    #[test]
-    fn dotted_and_unicode_session_names_resolve_boundaries() {
-        for session in ["api.v2", "café.v2"] {
-            let board = parse_tasks_board(&format!("## Open\n- 002 api needs: {session}/001\n"));
-            let mut boundary =
-                |s: &str, t: &str| (s == session && t == "001").then_some(Status::Done);
-            let v = build_view(&board, "csm", &mut boundary, &HashSet::new()).unwrap();
-            assert_eq!(v.claimable_line, "002");
-            assert_eq!(
-                lines(&v),
-                vec![
-                    "└── ○ 002 api".to_string(),
-                    format!("    └── ✓ {session}/001")
-                ]
-            );
-        }
-    }
-
-    #[test]
-    fn own_session_prefix_resolves_locally() {
-        let md = "# b\n\n## Open\n- 002 api needs: csm/001\n\n## Done\n- 001 contract\n";
-        let v = view(md);
-        assert_eq!(v.claimable_line, "002");
-        assert_eq!(lines(&v), vec!["└── ○ 002 api", "    └── ✓ 001 contract"]);
-    }
-
-    #[test]
-    fn unknown_boundary_is_flagged_not_satisfied() {
-        let v = view("# b\n\n## Open\n- 002 api needs: api-contract/012\n");
+    fn session_qualified_ref_blocks_claiming_even_if_local_id_is_done() {
+        let v = view("## Open\n- 002 api needs: api-contract/012\n\n## Done\n- 012 contract\n");
         assert_eq!(v.claimable_line, "");
         assert_eq!(
             lines(&v),
-            vec!["└── ○ 002 api", "    └── ? api-contract/012 (unknown)"]
+            vec![
+                "└── ○ 002 api",
+                "    └── ! unparseable tail (needs: api-contract/012)",
+            ]
         );
     }
 
@@ -574,14 +485,14 @@ mod tests {
     fn unresolved_leaves_keep_their_condition() {
         let v = view(
             "# b\n\n## Open\n- 002 api needs: 099 [interface PR merged], \
-             api-contract/012 [deployed]\n",
+             012 [deployed]\n",
         );
         assert_eq!(
             lines(&v),
             vec![
                 "└── ○ 002 api",
                 "    ├── ? 099 [interface PR merged] (missing)",
-                "    └── ? api-contract/012 [deployed] (unknown)",
+                "    └── ? 012 [deployed] (missing)",
             ]
         );
         assert_eq!(v.claimable_line, "");

@@ -4,7 +4,7 @@ use csm::{agent, doctor, gc, hook, inject, markdown, needs, store, ui, workspace
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 
 #[derive(Parser)]
@@ -772,7 +772,7 @@ fn cmd_show(name: Option<String>) -> Result<()> {
 
     let board = workspace::read_tasks_board(&name).unwrap_or_default();
     let view_ids = workspace::view_task_ids(&name);
-    let (lines, claimable) = tasks_block_lines(&board, &name, &view_ids);
+    let (lines, claimable) = tasks_block_lines(&board, &view_ids);
     card_multiline_row("tasks", &lines);
     if !claimable.is_empty() {
         card_row("claimable", &claimable);
@@ -789,7 +789,6 @@ fn session_context_lines(name: &str) -> Vec<String> {
 
 fn tasks_block_lines(
     board: &workspace::TasksBoard,
-    name: &str,
     view_ids: &HashSet<String>,
 ) -> (Vec<String>, String) {
     let total = board.entry_count();
@@ -797,20 +796,8 @@ fn tasks_block_lines(
     if total > 0 {
         lines.push(tasks_summary_line(board));
     }
-    let mut foreign: HashMap<String, Option<workspace::TasksBoard>> = HashMap::new();
     let mut claimable = String::new();
-    if let Some(view) = needs::build_view(
-        board,
-        name,
-        &mut |s, t| {
-            foreign
-                .entry(s.to_string())
-                .or_insert_with(|| workspace::read_tasks_board(s))
-                .as_ref()
-                .and_then(|b| b.status_of(t))
-        },
-        view_ids,
-    ) {
+    if let Some(view) = needs::build_view(board, view_ids) {
         for section in view.sections {
             lines.push(section_label(section.status));
             lines.extend(section.lines);
@@ -1168,7 +1155,7 @@ mod tests {
             "## Open\n- 002 a\n\n## Pending review\n- 003 b\n\n\
              ## Pending fix\n- 004 c\n\n## Done\n- 001 d\n",
         );
-        let (lines, claimable) = tasks_block_lines(&b, "ws", &HashSet::new());
+        let (lines, claimable) = tasks_block_lines(&b, &HashSet::new());
         assert_eq!(
             lines,
             vec![
